@@ -1,6 +1,6 @@
 /**
  * API 키 없이 유튜브 검색 → videoId 수집 → 재생목록 URL 생성
- * 우선순위: (제목 관련) 마커스워십/피아워십 → 재생수 많은 영상
+ * 우선순위: 제목 관련 영상 중 조회수 최다 (동점이면 마커스/피아)
  * 속도: 곡별 검색 병렬 + 곡 동시 2개 처리
  */
 const YouTube = require('youtube-sr').default;
@@ -74,10 +74,14 @@ function pickBestVideo(candidates, songTitle) {
   );
   if (relevant.length === 0) return null;
 
-  const preferred = relevant.filter(isPreferredArtist);
-  const finalPool = preferred.length > 0 ? preferred : relevant;
-  finalPool.sort((a, b) => viewsOf(b) - viewsOf(a));
-  return finalPool[0];
+  // 기존 조건(제목 관련) 충족 후보 중 조회수 최다 우선
+  // 조회수 같으면 마커스/피아를 보조로 선호
+  relevant.sort((a, b) => {
+    const byViews = viewsOf(b) - viewsOf(a);
+    if (byViews !== 0) return byViews;
+    return (isPreferredArtist(b) ? 1 : 0) - (isPreferredArtist(a) ? 1 : 0);
+  });
+  return relevant[0];
 }
 
 async function searchOne(query, limit = 8) {
