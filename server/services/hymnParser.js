@@ -410,12 +410,14 @@ function mergeByTitle(songs) {
         title: song.title,
         composer: song.composer,
         number: song.number,
+        key: song.key,
         confidence: song.confidence,
         selected: song.selected !== false && song.confidence >= 0.7,
       });
-    } else if (prev && !prev.composer && song.composer) {
-      prev.composer = song.composer;
+    } else if (prev) {
+      if (!prev.composer && song.composer) prev.composer = song.composer;
       if (song.number && !prev.number) prev.number = song.number;
+      if (song.key && !prev.key) prev.key = song.key;
     }
   }
   return [...map.values()].sort((a, b) => b.confidence - a.confidence);

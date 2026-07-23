@@ -45,6 +45,7 @@ export function SongRow({ song, onToggle, onRemove }: Props) {
             {song.title}
           </Text>
           <Text style={typography.caption} numberOfLines={1}>
+            {song.key ? `${song.key}키 · ` : ''}
             {song.number ? `${song.number}장 · ` : ''}
             {song.match
               ? song.match.channelTitle
@@ -149,6 +150,6 @@ const styles = StyleSheet.create({
   removeText: {
     ...typography.caption,
     color: '#F0B0A4',
-    fontFamily: 'NotoSansKR_500Medium',
+    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
   },
 });

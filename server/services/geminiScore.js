@@ -5,6 +5,7 @@
 const { randomUUID } = require('crypto');
 const { PDFParse } = require('pdf-parse');
 const { isJunkTitle, isPageMarker } = require('./hymnParser');
+const { normalizeMusicKey } = require('./musicKey');
 
 function isConfigured() {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
@@ -30,16 +31,18 @@ function parseJsonSongs(raw) {
               title: item.trim(),
               composer: undefined,
               number: undefined,
+              key: undefined,
             };
           }
-        return {
-          title: String(item?.title || '')
-            .replace(/\s*\([^)]*입례[^)]*\)\s*$/g, '')
-            .replace(/\s+/g, ' ')
-            .trim(),
-          composer: item?.composer ? String(item.composer).trim() : undefined,
-          number: item?.number ? String(item.number).trim() : undefined,
-        };
+          return {
+            title: String(item?.title || '')
+              .replace(/\s*\([^)]*입례[^)]*\)\s*$/g, '')
+              .replace(/\s+/g, ' ')
+              .trim(),
+            composer: item?.composer ? String(item.composer).trim() : undefined,
+            number: item?.number ? String(item.number).trim() : undefined,
+            key: normalizeMusicKey(item?.key || item?.musicKey || ''),
+          };
         })
         .filter(
           (s) => s.title && !isJunkTitle(s.title) && !isPageMarker(s.title),
@@ -62,7 +65,12 @@ function parseJsonSongs(raw) {
   );
   return titles
     .filter((t) => t && !isJunkTitle(t) && !isPageMarker(t))
-    .map((title) => ({ title, composer: undefined, number: undefined }));
+    .map((title) => ({
+      title,
+      composer: undefined,
+      number: undefined,
+      key: undefined,
+    }));
 }
 
 /** PDF 앞 페이지를 JPEG로 렌더 (토큰/쿼터 절약) */
@@ -122,10 +130,13 @@ async function extractSongsWithGemini(buffer, fileName) {
     return null;
   }
 
-  const prompt = `교회 찬양/악보 PDF 이미지입니다. 곡 제목만 JSON 배열로 추출하세요.
+  const prompt = `교회 찬양/악보 PDF 이미지입니다. 곡 제목과 조성(Key)을 JSON 배열로 추출하세요.
 파일: ${fileName || 'score.pdf'}
-규칙: 곡 제목만. 가사·코드·페이지번호 제외. composer/number 없으면 "".
-출력 예: [{"title":"곡명","composer":"","number":""}]
+규칙:
+- 곡 제목만. 가사·코드나열·페이지번호 제외.
+- key는 악보에 표시된 조성 (예: G, C, D, Bb, Em). Capo 숫자만 있으면 "".
+- composer/number/key 없으면 "".
+출력 예: [{"title":"곡명","composer":"","number":"","key":"G"}]
 설명 없이 JSON만.`;
 
   const parts = [
@@ -172,6 +183,7 @@ async function extractSongsWithGemini(buffer, fileName) {
           title: s.title,
           composer: s.composer || undefined,
           number: s.number || undefined,
+          key: s.key || undefined,
           confidence: 0.94,
           selected: true,
         }));

@@ -85,11 +85,12 @@ export function SongsScreen({ navigation, route }: Props) {
     try {
       const result = await api.autoPlaylist({
         title: playlistTitle,
-        songs: selected.map(({ id, title, composer, number }) => ({
+        songs: selected.map(({ id, title, composer, number, key }) => ({
           id,
           title,
           composer,
           number,
+          key,
         })),
       });
 
@@ -159,6 +160,8 @@ export function SongsScreen({ navigation, route }: Props) {
               ? '찬송가 인식'
               : analyze.method === 'ocr'
                 ? 'OCR 인식'
+                : analyze.method === 'gemini'
+                  ? 'AI 인식'
                 : 'PDF 분석'}{' '}
           · {selectedCount}곡 선택
         </Text>

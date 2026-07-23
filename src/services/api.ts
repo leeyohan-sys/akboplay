@@ -224,7 +224,13 @@ export const api = {
 
   autoPlaylist: (payload: {
     title: string;
-    songs: { id: string; title: string; composer?: string; number?: string }[];
+    songs: {
+      id: string;
+      title: string;
+      composer?: string;
+      number?: string;
+      key?: string;
+    }[];
   }) =>
     request<{
       title: string;

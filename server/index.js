@@ -134,6 +134,7 @@ app.post('/api/playlist/auto', async (req, res) => {
         title: String(s.title || '').trim(),
         composer: s.composer ? String(s.composer) : undefined,
         number: s.number ? String(s.number) : undefined,
+        key: s.key ? String(s.key) : undefined,
       })),
     });
     console.log(

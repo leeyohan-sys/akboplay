@@ -4,6 +4,7 @@
  * 속도: 곡별 검색 병렬 + 곡 동시 2개 처리
  */
 const YouTube = require('youtube-sr').default;
+const { formatKeyForSearch } = require('./musicKey');
 
 const PREFERRED_ARTIST_RE =
   /마커스\s*워십|marcus\s*worship|markers\s*worship|\bmarkers\b|피아\s*워십|fia\s*worship|\bf\.?\s*i\.?\s*a\.?\b|마커스워십|피아워십/i;
@@ -11,7 +12,11 @@ const PREFERRED_ARTIST_RE =
 const SEARCH_TIMEOUT_MS = 7000;
 
 function buildQuery(song) {
-  const parts = [String(song.title || '').trim()];
+  const title = String(song.title || '').trim();
+  const parts = [title];
+  // 조성 있으면 "곡명 G키" 형태로 검색
+  const keyLabel = formatKeyForSearch(song.key);
+  if (keyLabel) parts.push(keyLabel);
   if (song.number) parts.push(`${song.number}장`);
   if (
     /하나님|예수|성령|찬송|은혜|나그네|죄악|만지소서|만족/.test(song.title || '') ||
@@ -106,11 +111,14 @@ async function resolveOneSong(song) {
   }
 
   const base = buildQuery(song);
+  const keyLabel = formatKeyForSearch(song.key);
+  // 마커스/피아 검색에도 조성 포함: "곡명 G키 마커스워십"
+  const titled = keyLabel ? `${title} ${keyLabel}` : title;
 
   // 3개 검색을 동시에 실행 (속도 개선)
   const [marcus, fia, general] = await Promise.all([
-    searchOne(`${title} 마커스워십`, 8),
-    searchOne(`${title} 피아워십`, 8),
+    searchOne(`${titled} 마커스워십`, 8),
+    searchOne(`${titled} 피아워십`, 8),
     searchOne(base, 8),
   ]);
 

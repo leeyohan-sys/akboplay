@@ -4,6 +4,8 @@ export type SongCandidate = {
   composer?: string;
   /** 찬송가 장 번호 */
   number?: string;
+  /** 조성 (예: G, Bb, Em) */
+  key?: string;
   confidence: number;
   selected: boolean;
 };
@@ -25,7 +27,7 @@ export type AnalyzeResult = {
   fileName: string;
   songs: SongCandidate[];
   rawTextPreview?: string;
-  method: 'text' | 'heuristic' | 'demo' | 'hymn' | 'ocr';
+  method: 'text' | 'heuristic' | 'demo' | 'hymn' | 'ocr' | 'gemini';
   note?: string;
 };
 
