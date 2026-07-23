@@ -14,7 +14,8 @@ import { ScreenShell } from '../components/ScreenShell';
 import { SongRow } from '../components/SongRow';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { navigateYoutubeWindow } from '../services/youtubeLauncher';
+import { navigateYoutubeWindow, sharePlaybackUrl } from '../services/youtubeLauncher';
+import { showAlert } from '../utils/dialog';
 import type { MatchedSong } from '../types';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -49,15 +50,36 @@ export function PlaylistScreen({ navigation, route }: Props) {
     navigateYoutubeWindow(null, playlistUrl);
   };
 
+  const share = async () => {
+    if (!playlistUrl) return;
+    const result = await sharePlaybackUrl(playlistUrl, title);
+    if (result === 'shared') {
+      // 시스템 공유 시트로 전달됨
+      return;
+    }
+    if (result === 'copied') {
+      showAlert('링크 복사됨', '재생 URL이 클립보드에 복사되었습니다. 카카오톡 등에 붙여넣기 하세요.');
+      return;
+    }
+    showAlert('공유 실패', '이 기기에서는 공유를 사용할 수 없습니다.');
+  };
+
   return (
     <ScreenShell
       footer={
         <View style={styles.footerInner}>
           {playlistUrl ? (
-            <PrimaryButton
-              label="유튜브 플레이리스트 다시 열기"
-              onPress={reopen}
-            />
+            <>
+              <PrimaryButton
+                label="유튜브 플레이리스트 다시 열기"
+                onPress={reopen}
+              />
+              <PrimaryButton
+                label="재생 링크 공유"
+                onPress={share}
+                variant="ghost"
+              />
+            </>
           ) : null}
           <PrimaryButton
             label="처음으로"
@@ -89,8 +111,8 @@ export function PlaylistScreen({ navigation, route }: Props) {
       <View style={styles.guide}>
         <Text style={styles.guideTitle}>완료</Text>
         <Text style={typography.body}>
-          새 창에서 곡 순서대로 재생 중입니다.{'\n'}
-          보관하려면 유튜브에서 [저장] → 새 플레이리스트를 선택하세요.
+          유튜브 앱에서 곡 순서대로 재생합니다.{'\n'}
+          아래 [재생 링크 공유]로 URL을 카카오톡 등에 보낼 수 있습니다.
         </Text>
       </View>
 
@@ -134,7 +156,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     backgroundColor: 'rgba(30, 44, 68, 0.7)',
     color: colors.cream,
-    fontFamily: 'NotoSansKR_500Medium',
+    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
     fontSize: 15,
     borderWidth: 1,
     borderColor: 'rgba(201, 162, 39, 0.25)',
