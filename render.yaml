@@ -12,3 +12,5 @@ services:
         value: production
       - key: PORT
         value: "4000"
+      - key: GEMINI_API_KEY
+        sync: false

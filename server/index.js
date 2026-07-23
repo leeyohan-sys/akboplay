@@ -36,7 +36,8 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
-    version: 'ocr-set-20260723b',
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+    version: 'gemini-score-20260723',
   });
 });
 

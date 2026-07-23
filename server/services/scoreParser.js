@@ -1,8 +1,7 @@
 /**
  * 악보 PDF에서 곡 제목/작곡가 후보를 추출합니다.
- * - 텍스트 PDF: pdf-parse
- * - 찬송가 스캔(Adobe Scan 등): 가사 지문 + 휴리스틱
- * - 텍스트가 거의 없으면: 페이지 렌더 → Tesseract OCR
+ * - 텍스트 PDF: pdf-parse + 찬송가 지문
+ * - 스캔본: Gemini(우선) → Tesseract OCR 폴백
  */
 const { PDFParse } = require('pdf-parse');
 const { randomUUID } = require('crypto');
@@ -14,6 +13,10 @@ const {
   isPageMarker,
   isThinPdfText,
 } = require('./hymnParser');
+const {
+  isConfigured: isGeminiConfigured,
+  extractSongsWithGemini,
+} = require('./geminiScore');
 
 const DEMO_SONGS = [
   { title: 'Canon in D', composer: 'Johann Pachelbel' },
@@ -262,29 +265,50 @@ async function analyzePdfBuffer(buffer, fileName) {
       ? extractSongsFromText(text)
       : [];
 
-  // 페이지 마커만 있거나 잡음 제목만 있으면 OCR
+  // 페이지 마커만 있거나 곡이 부족하면 Gemini → OCR
   songs = songs.filter((s) => !isPageMarker(s.title) && !isJunkTitle(s.title));
 
-  const needsOcr =
+  const needsVision =
     isThinPdfText(text) ||
     songs.length === 0 ||
     songs.every((s) => s.confidence < 0.7) ||
     (isJunkFileName(fileName) && songs.length === 0);
 
-  if (needsOcr) {
-    try {
-      console.log('[analyze] OCR 시작…');
-      const ocrText = await ocrPdfPages(buffer, { maxMs: 35000 });
-      if (ocrText && ocrText.trim().length > 20) {
-        text = `${text}\n${ocrText}`;
-        songs = extractSongsFromText(text).filter(
-          (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
-        );
-        method = 'ocr';
-        console.log(`[analyze] OCR 완료 · 후보 ${songs.length}곡`);
+  if (needsVision) {
+    // 1) Gemini (키가 있으면 OCR보다 우선 — 스캔 악보에 강함)
+    if (isGeminiConfigured()) {
+      try {
+        console.log('[analyze] Gemini 인식 시작…');
+        const gemini = await extractSongsWithGemini(buffer, fileName);
+        if (gemini?.songs?.length) {
+          songs = gemini.songs.filter(
+            (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
+          );
+          text = `${text}\n${gemini.rawText || ''}`;
+          method = 'gemini';
+          console.log(`[analyze] Gemini 완료 · 후보 ${songs.length}곡`);
+        }
+      } catch (err) {
+        console.warn('[analyze] Gemini 실패:', err.message);
       }
-    } catch (err) {
-      console.warn('[analyze] OCR 실패:', err.message);
+    }
+
+    // 2) Gemini가 비었으면 Tesseract OCR 폴백
+    if (songs.length === 0) {
+      try {
+        console.log('[analyze] OCR 시작…');
+        const ocrText = await ocrPdfPages(buffer, { maxMs: 35000 });
+        if (ocrText && ocrText.trim().length > 20) {
+          text = `${text}\n${ocrText}`;
+          songs = extractSongsFromText(text).filter(
+            (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
+          );
+          method = 'ocr';
+          console.log(`[analyze] OCR 완료 · 후보 ${songs.length}곡`);
+        }
+      } catch (err) {
+        console.warn('[analyze] OCR 실패:', err.message);
+      }
     }
   }
 
@@ -295,6 +319,22 @@ async function analyzePdfBuffer(buffer, fileName) {
 
   // 알려진 찬양 세트(헌신예배 등)는 OCR이 일부만 잡아도 보완
   songs = completeKnownWorshipSets(songs, fileName, text);
+
+  // 제목 정규화 후 중복 제거 (예: "예배하는 자 되어 (입례)")
+  songs = songs.map((s) => ({
+    ...s,
+    title: String(s.title || '')
+      .replace(/\s*\([^)]*입례[^)]*\)\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  }));
+  const seen = new Set();
+  songs = songs.filter((s) => {
+    const key = s.title.replace(/\s+/g, '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   if (songs.length === 0) {
     return {
