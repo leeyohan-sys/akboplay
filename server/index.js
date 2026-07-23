@@ -36,7 +36,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
-    version: 'ocr-lite-20260723',
+    version: 'ocr-set-20260723b',
   });
 });
 

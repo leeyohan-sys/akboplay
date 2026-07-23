@@ -8,6 +8,7 @@ const { PDFParse } = require('pdf-parse');
 const { randomUUID } = require('crypto');
 const {
   extractHymnsFromText,
+  completeKnownWorshipSets,
   isJunkFileName,
   isJunkTitle,
   isPageMarker,
@@ -210,8 +211,10 @@ async function ocrPdfPages(buffer, options = {}) {
         try {
           const crop = await sharp(img)
             .extract(region)
+            .resize({ width: 900, withoutEnlargement: false })
             .grayscale()
             .normalize()
+            .sharpen()
             .png()
             .toBuffer();
           const result = await worker.recognize(crop);
@@ -289,6 +292,9 @@ async function analyzePdfBuffer(buffer, fileName) {
   songs = songs.filter(
     (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
   );
+
+  // 알려진 찬양 세트(헌신예배 등)는 OCR이 일부만 잡아도 보완
+  songs = completeKnownWorshipSets(songs, fileName, text);
 
   if (songs.length === 0) {
     return {

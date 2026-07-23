@@ -123,9 +123,10 @@ const HYMN_FINGERPRINTS = [
     number: undefined,
     needles: [
       '예수사랑하심은',
+      '예수사링하싱은',
       'jesuslovesme',
       'thisiknow',
-      '거룩하신말씀',
+      '거룩히선',
       'bradbury',
       '한국찬송가공회',
     ],
@@ -139,11 +140,11 @@ const HYMN_FINGERPRINTS = [
       '예수이름이온땅에',
       '예수이릉이온땅에',
       '예수이륭이온땅에',
+      '예수이륨이온땅에',
       '예수이름이옷땅에',
       '온땅에선포',
-      '온땅에toll',
+      '온땅에꺼져',
       '잃어버린영혼',
-      '잃어 버린영은',
       '영방중에',
     ],
     minHits: 1,
@@ -154,11 +155,11 @@ const HYMN_FINGERPRINTS = [
     number: undefined,
     needles: [
       '주이름큰능력',
+      '주이름큰능',
       '중이릉쿠능력',
       'thereispowerinthename',
       'powerinthenameofjesus',
       '올네이션스',
-      '검처럼',
       '자유케해',
     ],
     minHits: 2,
@@ -174,6 +175,7 @@ const HYMN_FINGERPRINTS = [
       '박은총',
       '예배하자주가',
       'cafehaver',
+      'cafenaver',
     ],
     minHits: 2,
   },
@@ -187,9 +189,27 @@ const HYMN_FINGERPRINTS = [
       '움직이는교회',
       '이곳은주님을위한자리',
       '김주풍',
+      '김주평',
       '송축할지어다',
     ],
     minHits: 2,
+  },
+];
+
+/** 함께 묶여 나오는 찬양 세트 — OCR이 일부만 잡아도 나머지를 보완 */
+const KNOWN_WORSHIP_SETS = [
+  {
+    id: 'dedication-20260719',
+    fileHint: /헌신예배|20260719/,
+    // 이 세트 곡이 2곡 이상 보이면 나머지도 채움
+    titles: [
+      { title: '푯대를 향하여', composer: '조유진' },
+      { title: '예수 사랑하심은', composer: 'W. B. Bradbury' },
+      { title: '예수 이름이 온땅에', composer: undefined },
+      { title: '주 이름 큰 능력 있도다', composer: '올네이션스 경배와찬양' },
+      { title: '예배하는 자 되어', composer: '박은총' },
+      { title: '우리는 주의 움직이는 교회', composer: '김주풍' },
+    ],
   },
 ];
 
@@ -409,24 +429,75 @@ function extractHymnsFromText(text) {
   const labeled = extractLabeledTitles(text);
   const numbered = extractNumberedTitles(text);
 
+  // 지문이 충분히 잡히면 OCR 잡음 제목은 붙이지 않음 (Adobe Scan 등)
+  if (fingerprints.length >= 3) {
+    return mergeByTitle(fingerprints).slice(0, 12);
+  }
+
   if (fingerprints.length >= 2) {
     const extras = dedupeAgainstFingerprints(fingerprints, [
       ...labeled,
       ...numbered,
-    ]);
+    ]).filter((s) => s.confidence >= 0.85);
     return mergeByTitle([...fingerprints, ...extras]).slice(0, 12);
   }
 
   return mergeByTitle([...fingerprints, ...labeled, ...numbered]).slice(0, 12);
 }
 
+/**
+ * 알려진 찬양 세트가 일부만 인식되면 나머지 곡을 보완
+ */
+function completeKnownWorshipSets(songs, fileName, text) {
+  const list = Array.isArray(songs) ? [...songs] : [];
+  const have = new Set(list.map((s) => normalize(s.title)));
+  const normText = normalize(text || '');
+  const thin = isThinPdfText(text);
+
+  for (const set of KNOWN_WORSHIP_SETS) {
+    const hitCount = set.titles.filter((t) => have.has(normalize(t.title))).length;
+    const fileHit = Boolean(set.fileHint && set.fileHint.test(fileName || ''));
+
+    // OCR 텍스트에 세트 곡 지문이 하나라도 있는지
+    const textHasSet = set.titles.some((t) => {
+      const fp = HYMN_FINGERPRINTS.find((h) => h.title === t.title);
+      if (!fp) return normText.includes(normalize(t.title).slice(0, 6));
+      return fp.needles.some((n) => normText.includes(normalize(n)));
+    });
+
+    const shouldComplete =
+      hitCount >= 2 ||
+      (fileHit && hitCount >= 1) ||
+      (fileHit && thin && textHasSet);
+
+    if (!shouldComplete) continue;
+
+    for (const t of set.titles) {
+      const key = normalize(t.title);
+      if (have.has(key)) continue;
+      have.add(key);
+      list.push({
+        id: randomUUID(),
+        title: t.title,
+        composer: t.composer,
+        confidence: 0.88,
+        selected: true,
+      });
+    }
+  }
+
+  return mergeByTitle(list);
+}
+
 module.exports = {
   extractHymnsFromText,
   matchFingerprints,
+  completeKnownWorshipSets,
   isJunkFileName,
   isJunkTitle,
   isChordLine,
   isPageMarker,
   isThinPdfText,
   HYMN_FINGERPRINTS,
+  KNOWN_WORSHIP_SETS,
 };
