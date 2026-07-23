@@ -9,6 +9,9 @@ const { randomUUID } = require('crypto');
 const {
   extractHymnsFromText,
   isJunkFileName,
+  isJunkTitle,
+  isPageMarker,
+  isThinPdfText,
 } = require('./hymnParser');
 
 const DEMO_SONGS = [
@@ -32,6 +35,7 @@ function cleanLine(line) {
 
 function looksLikeTitle(line) {
   if (!line || line.length < 2 || line.length > 80) return false;
+  if (isPageMarker(line) || isJunkTitle(line)) return false;
   if (NOISE.test(line)) return false;
   if (/^[\d\W]+$/.test(line)) return false;
   if (/^[♪♫𝄞𝄢♮♯♭\s\-–—]+$/.test(line)) return false;
@@ -117,9 +121,9 @@ function extractGenericSongsFromText(text) {
 }
 
 function extractSongsFromText(text) {
-  // 찬송가/복음성가 단서면 일반 휴리스틱(코드·작곡가 조각)으로 넘어가지 않음
+  // 찬송가/복음성가/CCM 단서면 일반 휴리스틱(코드·작곡가 조각)으로 넘어가지 않음
   const hymnalHint =
-    /후렴|찬송|보통으로|기타코드|마\s*\d+|고후|cassel|nakada|복음가|성령\s*하나님|나그네/i.test(
+    /후렴|찬송|보통으로|기타코드|마\s*\d+|고후|cassel|nakada|복음가|성령\s*하나님|나그네|예배|푯대|jesus\s*loves|경배와찬양|움직이는\s*교회/i.test(
       text,
     );
 
@@ -127,7 +131,9 @@ function extractSongsFromText(text) {
   if (hymns.length >= 1 || hymnalHint) {
     return hymns;
   }
-  return extractGenericSongsFromText(text);
+  return extractGenericSongsFromText(text).filter(
+    (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
+  );
 }
 
 /** 페이지 이미지를 OCR (스캔본 보강) */
@@ -144,8 +150,8 @@ async function ocrPdfPages(buffer) {
   const parser = new PDFParse({ data: buffer });
   try {
     const shot = await parser.getScreenshot({
-      first: 5,
-      scale: 2,
+      first: 6,
+      scale: 2.2,
       imageBuffer: true,
       imageDataUrl: false,
     });
@@ -153,16 +159,23 @@ async function ocrPdfPages(buffer) {
     const chunks = [];
     for (const page of shot.pages || []) {
       const img = Buffer.from(page.data);
-      // 상단·중단(두 곡이 위아래로 있는 찬송가 페이지) 크롭
       const meta = await sharp(img).metadata();
       const h = meta.height || 0;
       const w = meta.width || 0;
       if (!h || !w) continue;
 
-      const regions = [
-        { left: 0, top: 0, width: w, height: Math.floor(h * 0.22) },
-        { left: 0, top: Math.floor(h * 0.45), width: w, height: Math.floor(h * 0.2) },
-      ];
+      const landscape = w > h;
+      // 가로 악보(좌우 2곡) / 세로 악보(상하 2곡) 모두 커버
+      const regions = landscape
+        ? [
+            { left: 0, top: 0, width: Math.floor(w * 0.5), height: Math.floor(h * 0.28) },
+            { left: Math.floor(w * 0.5), top: 0, width: Math.floor(w * 0.5), height: Math.floor(h * 0.28) },
+            { left: 0, top: Math.floor(h * 0.08), width: w, height: Math.floor(h * 0.22) },
+          ]
+        : [
+            { left: 0, top: 0, width: w, height: Math.floor(h * 0.22) },
+            { left: 0, top: Math.floor(h * 0.45), width: w, height: Math.floor(h * 0.2) },
+          ];
 
       for (const region of regions) {
         try {
@@ -174,6 +187,20 @@ async function ocrPdfPages(buffer) {
         } catch {
           // 개별 영역 실패는 무시
         }
+      }
+
+      // 스캔 악보는 전체 페이지 OCR이 제목 인식에 더 안정적
+      try {
+        const full = await sharp(img)
+          .resize({ width: Math.min(w, 1600), withoutEnlargement: true })
+          .png()
+          .toBuffer();
+        const result = await Tesseract.recognize(full, 'kor+eng', {
+          logger: () => undefined,
+        });
+        if (result?.data?.text) chunks.push(result.data.text);
+      } catch {
+        // ignore
       }
     }
     return chunks.join('\n');
@@ -206,21 +233,31 @@ async function analyzePdfBuffer(buffer, fileName) {
   }
 
   let method = 'text';
-  let songs = text.length >= 10 ? extractSongsFromText(text) : [];
+  let songs =
+    text.length >= 10 && !isThinPdfText(text)
+      ? extractSongsFromText(text)
+      : [];
 
-  // 찬송가 지문이 약하거나 결과가 비면 OCR 보강
+  // 페이지 마커만 있거나 잡음 제목만 있으면 OCR 강제
+  songs = songs.filter((s) => !isPageMarker(s.title) && !isJunkTitle(s.title));
+
   const needsOcr =
+    isThinPdfText(text) ||
     songs.length === 0 ||
     songs.every((s) => s.confidence < 0.7) ||
     (isJunkFileName(fileName) && songs.length === 0);
 
-  if (needsOcr || (text.length < 80 && songs.length === 0)) {
+  if (needsOcr) {
     try {
+      console.log('[analyze] OCR 시작…');
       const ocrText = await ocrPdfPages(buffer);
       if (ocrText && ocrText.trim().length > 20) {
         text = `${text}\n${ocrText}`;
-        songs = extractSongsFromText(text);
+        songs = extractSongsFromText(text).filter(
+          (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
+        );
         method = 'ocr';
+        console.log(`[analyze] OCR 완료 · 후보 ${songs.length}곡`);
       }
     } catch (err) {
       console.warn('[analyze] OCR 실패:', err.message);
@@ -228,7 +265,7 @@ async function analyzePdfBuffer(buffer, fileName) {
   }
 
   // 파일명을 곡으로 쓰지 않음 (Adobe Scan 2026. 7. 17. 등)
-  songs = songs.filter((s) => !isJunkFileName(s.title));
+  songs = songs.filter((s) => !isJunkFileName(s.title) && !isPageMarker(s.title));
 
   if (songs.length === 0) {
     return {
@@ -240,8 +277,10 @@ async function analyzePdfBuffer(buffer, fileName) {
     };
   }
 
-  // 찬송가면 YouTube 검색에 도움이 되도록 표시
-  const hymnal = songs.some((s) => s.number || /찬송|은혜|하나님|예수/.test(s.title));
+  // 찬송가/CCM이면 YouTube 검색에 도움이 되도록 표시
+  const hymnal = songs.some((s) =>
+    Boolean(s.number || /찬송|은혜|하나님|예수|예배|푯대|교회/.test(s.title)),
+  );
   return {
     fileName,
     method: hymnal && method === 'text' ? 'hymn' : method,

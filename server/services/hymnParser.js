@@ -1,5 +1,5 @@
 /**
- * 한국 찬송가/복음성가 스캔본에서 곡 제목을 추출합니다.
+ * 한국 찬송가/복음성가/CCM 스캔본에서 곡 제목을 추출합니다.
  * Adobe Scan OCR은 오선·코드와 섞여 품질이 낮아, 가사 지문을 우선합니다.
  */
 const { randomUUID } = require('crypto');
@@ -11,7 +11,10 @@ const JUNK_FILENAME_RE =
   /adobe\s*scan|camscanner|genius\s*scan|scan\s*\d|\d{4}\.\s*\d{1,2}\.\s*\d{1,2}/i;
 
 const JUNK_TITLE_RE =
-  /^(편잡인|편집인|후렴|보통으로|쉬운|기타코드|세계선교|기도와|축도후|capt?o|cassel|meet|heart)/i;
+  /^(편잡인|편집인|후렴|보통으로|쉬운|기타코드|세계선교|기도와|축도후|capt?o|cassel|meet|heart|words\s*&?\s*music|입례)/i;
+
+/** PDF 뷰어가 넣는 페이지 마커 (-- 1 of 3 -- 등) */
+const PAGE_MARKER_RE = /^[-–—\s]*\d+\s*of\s*\d+[-–—\s]*$/i;
 
 /**
  * 가사/문구 지문 → 정식 제목
@@ -97,6 +100,97 @@ const HYMN_FINGERPRINTS = [
     ],
     minHits: 2,
   },
+  // --- 헌신예배 찬양셋 (20260719) ---
+  {
+    title: '푯대를 향하여',
+    composer: '조유진',
+    number: undefined,
+    needles: [
+      '푯대를향하여',
+      '푯대를향하',
+      '표대를향하여',
+      '풋대를향하여',
+      '내게유익하던',
+      '해로여기네',
+      '조유진',
+      '부름의상',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '예수 사랑하심은',
+    composer: 'W. B. Bradbury',
+    number: undefined,
+    needles: [
+      '예수사랑하심은',
+      'jesuslovesme',
+      'thisiknow',
+      '거룩하신말씀',
+      'bradbury',
+      '한국찬송가공회',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '예수 이름이 온땅에',
+    composer: undefined,
+    number: undefined,
+    needles: [
+      '예수이름이온땅에',
+      '예수이릉이온땅에',
+      '예수이륭이온땅에',
+      '예수이름이옷땅에',
+      '온땅에선포',
+      '온땅에toll',
+      '잃어버린영혼',
+      '잃어 버린영은',
+      '영방중에',
+    ],
+    minHits: 1,
+  },
+  {
+    title: '주 이름 큰 능력 있도다',
+    composer: '올네이션스 경배와찬양',
+    number: undefined,
+    needles: [
+      '주이름큰능력',
+      '중이릉쿠능력',
+      'thereispowerinthename',
+      'powerinthenameofjesus',
+      '올네이션스',
+      '검처럼',
+      '자유케해',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '예배하는 자 되어',
+    composer: '박은총',
+    number: undefined,
+    needles: [
+      '예배하는자되어',
+      '예배하는자돼',
+      '영과진리로',
+      '박은총',
+      '예배하자주가',
+      'cafehaver',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '우리는 주의 움직이는 교회',
+    composer: '김주풍',
+    number: undefined,
+    needles: [
+      '우리는주의움직이는교회',
+      '주의움직이는교회',
+      '움직이는교회',
+      '이곳은주님을위한자리',
+      '김주풍',
+      '송축할지어다',
+    ],
+    minHits: 2,
+  },
 ];
 
 function normalize(s) {
@@ -116,8 +210,17 @@ function isChordLine(line) {
   return CHORD_RE.test(t);
 }
 
+function isPageMarker(title) {
+  const t = String(title || '').trim();
+  if (PAGE_MARKER_RE.test(t)) return true;
+  if (/^\d+\s*of\s*\d+$/i.test(t)) return true;
+  if (/^--\s*\d+\s*of\s*\d+\s*--$/i.test(t)) return true;
+  return false;
+}
+
 function isJunkTitle(title) {
   if (!title) return true;
+  if (isPageMarker(title)) return true;
   if (JUNK_TITLE_RE.test(title.trim())) return true;
   if (isJunkFileName(title)) return true;
   if (hangulLen(title) < 4 && !/[A-Za-z]{4,}/.test(title)) return true;
@@ -128,6 +231,18 @@ function isJunkTitle(title) {
 
 function isJunkFileName(fileName) {
   return JUNK_FILENAME_RE.test(fileName || '');
+}
+
+/** 임베디드 텍스트가 사실상 비어 있는지 (페이지 마커만 있는 스캔본) */
+function isThinPdfText(text) {
+  const raw = String(text || '').trim();
+  if (raw.length < 20) return true;
+  const meaningful = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !isPageMarker(l) && !/^-+$/.test(l));
+  const joined = meaningful.join(' ');
+  return hangulLen(joined) < 8 && !/[A-Za-z]{6,}/.test(joined);
 }
 
 function matchFingerprints(text) {
@@ -158,10 +273,64 @@ function dedupeAgainstFingerprints(fingerprints, extras) {
     if (song.confidence < 0.75) return false;
     const n = normalize(song.title);
     if (n.length < 6) return false;
-    // 이미 지문으로 잡힌 제목의 조각이면 버림
     if (fpNorms.some((fp) => fp.includes(n) || n.includes(fp))) return false;
     return true;
   });
+}
+
+/**
+ * OCR에서 자주 나오는 "1) 제목" / "2) 제목  다른제목" 패턴
+ */
+function extractLabeledTitles(text) {
+  const found = [];
+  const seen = new Set();
+
+  const push = (title, confidence = 0.82) => {
+    const cleaned = String(title)
+      .replace(/\s+/g, ' ')
+      .replace(/[|\[\]~=]+/g, '')
+      .trim();
+    if (isJunkTitle(cleaned)) return;
+    if (hangulLen(cleaned) < 4 || hangulLen(cleaned) > 30) return;
+    // OCR 깨진 영문 조각이 섞인 제목 제외
+    const latin = ((cleaned.match(/[A-Za-z]/g) || []).length);
+    if (latin >= 3 && latin >= hangulLen(cleaned) * 0.4) return;
+    const key = normalize(cleaned);
+    if (seen.has(key)) return;
+    // 이미 등록된 지문 제목과 한 글자만 다른 변형(표대/푯대)은 스킵
+    if (
+      HYMN_FINGERPRINTS.some((h) => {
+        const fp = normalize(h.title);
+        return fp === key || (fp.length >= 6 && (fp.includes(key) || key.includes(fp)));
+      })
+    ) {
+      return;
+    }
+    seen.add(key);
+    found.push({
+      id: randomUUID(),
+      title: cleaned,
+      confidence,
+      selected: true,
+    });
+  };
+
+  // 1) 푯대를 향하여
+  const labeled = String(text || '').matchAll(
+    /(?:^|\n)\s*(\d{1,2})\s*[).．、]\s*([가-힣A-Za-z][가-힣A-Za-z\s]{2,40})/g,
+  );
+  for (const m of labeled) {
+    // 한 줄에 두 곡이 나란히 있는 경우: "예수 이름이 온땅에  주 이름 큰 능력 있도다"
+    const rest = m[2].trim();
+    const parts = rest.split(/\s{2,}|\t/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      parts.forEach((p) => push(p, 0.84));
+    } else {
+      push(rest, 0.86);
+    }
+  }
+
+  return found;
 }
 
 /**
@@ -172,7 +341,7 @@ function extractNumberedTitles(text) {
     .split(/\r?\n/)
     .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .filter((l) => !isChordLine(l));
+    .filter((l) => !isChordLine(l) && !isPageMarker(l));
 
   const found = [];
   const seen = new Set();
@@ -181,7 +350,6 @@ function extractNumberedTitles(text) {
     const m = lines[i].match(/^(\d{3,4})$/);
     if (!m) continue;
     const number = m[1];
-    // 연도·너무 작은 번호 제외 (찬송가 번호는 보통 1~2000)
     if (Number(number) >= 1800 && Number(number) <= 2100) continue;
 
     for (let j = Math.max(0, i - 4); j <= Math.min(lines.length - 1, i + 6); j++) {
@@ -238,15 +406,18 @@ function mergeByTitle(songs) {
  */
 function extractHymnsFromText(text) {
   const fingerprints = matchFingerprints(text);
+  const labeled = extractLabeledTitles(text);
   const numbered = extractNumberedTitles(text);
 
-  // 지문이 충분히 잡히면 지문 우선 + 겹치지 않는 보조만
   if (fingerprints.length >= 2) {
-    const extras = dedupeAgainstFingerprints(fingerprints, numbered);
+    const extras = dedupeAgainstFingerprints(fingerprints, [
+      ...labeled,
+      ...numbered,
+    ]);
     return mergeByTitle([...fingerprints, ...extras]).slice(0, 12);
   }
 
-  return mergeByTitle([...fingerprints, ...numbered]).slice(0, 12);
+  return mergeByTitle([...fingerprints, ...labeled, ...numbered]).slice(0, 12);
 }
 
 module.exports = {
@@ -255,5 +426,7 @@ module.exports = {
   isJunkFileName,
   isJunkTitle,
   isChordLine,
+  isPageMarker,
+  isThinPdfText,
   HYMN_FINGERPRINTS,
 };
