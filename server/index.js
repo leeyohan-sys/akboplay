@@ -28,7 +28,7 @@ app.use(
     maxAge: 86400,
   }),
 );
-app.options('*', cors());
+// Express 5 + path-to-regexp는 '*' 와일드카드 불가 → cors 미들웨어가 OPTIONS 처리
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (_req, res) => {
