@@ -1,42 +1,12 @@
 /**
  * API 키 없이 유튜브 검색 → videoId 수집 → 재생목록 URL 생성
- * 우선순위: 워십팀(마커스/피아/위러브/어노인팅/기프티드/아이자야…) → 재생수
- * 속도: 워십팀 검색 병렬 + 곡 동시 2개 처리
+ * 우선순위: (제목 관련) 마커스워십/피아워십 → 재생수 많은 영상
+ * 속도: 곡별 검색 병렬 + 곡 동시 2개 처리
  */
 const YouTube = require('youtube-sr').default;
 
-/** 우선 검색할 워십팀 (검색어 + 결과 판별용 정규식) */
-const PREFERRED_WORSHIP_TEAMS = [
-  {
-    query: '마커스워십',
-    re: /마커스\s*워십|marcus\s*worship|markers\s*worship|\bmarkers\b/i,
-  },
-  {
-    query: '피아워십',
-    re: /피아\s*워십|fia\s*worship|\bf\.?\s*i\.?\s*a\.?\b/i,
-  },
-  {
-    query: '위러브',
-    re: /위\s*러브|we\s*love|welove|\bwrlv\b/i,
-  },
-  {
-    query: '어노인팅',
-    re: /어노인팅|anointing/i,
-  },
-  {
-    query: '기프티드',
-    re: /기프티드|gifted/i,
-  },
-  {
-    query: '아이자야씩스티원',
-    re: /아이자야\s*씩스티\s*원|아이자야|isaiah\s*sixty\s*one|isaiah\s*61|이사야\s*61/i,
-  },
-];
-
-const PREFERRED_ARTIST_RE = new RegExp(
-  PREFERRED_WORSHIP_TEAMS.map((t) => t.re.source).join('|'),
-  'i',
-);
+const PREFERRED_ARTIST_RE =
+  /마커스\s*워십|marcus\s*worship|markers\s*worship|\bmarkers\b|피아\s*워십|fia\s*worship|\bf\.?\s*i\.?\s*a\.?\b|마커스워십|피아워십/i;
 
 const SEARCH_TIMEOUT_MS = 7000;
 
@@ -44,9 +14,7 @@ function buildQuery(song) {
   const parts = [String(song.title || '').trim()];
   if (song.number) parts.push(`${song.number}장`);
   if (
-    /하나님|예수|성령|찬송|은혜|나그네|죄악|만지소서|만족|예배|푯대|교회|워십/.test(
-      song.title || '',
-    ) ||
+    /하나님|예수|성령|찬송|은혜|나그네|죄악|만지소서|만족/.test(song.title || '') ||
     song.number
   ) {
     parts.push('찬양');
@@ -77,13 +45,6 @@ function isPreferredArtist(video) {
   return PREFERRED_ARTIST_RE.test(text);
 }
 
-/** 어느 워십팀인지(로그/디버그용) */
-function matchedWorshipTeam(video) {
-  const text = `${video?.title || ''} ${video?.channel?.name || ''}`;
-  const hit = PREFERRED_WORSHIP_TEAMS.find((t) => t.re.test(text));
-  return hit?.query || null;
-}
-
 function isTitleRelevant(video, songTitle) {
   const vt = normalizeKor(video?.title);
   const st = normalizeKor(songTitle);
@@ -108,7 +69,6 @@ function pickBestVideo(candidates, songTitle) {
   );
   if (relevant.length === 0) return null;
 
-  // 1순위: 지정 워십팀 + 제목 관련
   const preferred = relevant.filter(isPreferredArtist);
   const finalPool = preferred.length > 0 ? preferred : relevant;
   finalPool.sort((a, b) => viewsOf(b) - viewsOf(a));
@@ -147,22 +107,18 @@ async function resolveOneSong(song) {
 
   const base = buildQuery(song);
 
-  // 워십팀 + 일반 검색을 한꺼번에 병렬 실행 (워십팀 결과 우선 채택)
-  const [teamSearches, general] = await Promise.all([
-    Promise.all(
-      PREFERRED_WORSHIP_TEAMS.map((team) =>
-        searchOne(`${title} ${team.query}`, 6),
-      ),
-    ),
+  // 3개 검색을 동시에 실행 (속도 개선)
+  const [marcus, fia, general] = await Promise.all([
+    searchOne(`${title} 마커스워십`, 8),
+    searchOne(`${title} 피아워십`, 8),
     searchOne(base, 8),
   ]);
 
-  const teamHits = teamSearches.flat();
-  let best = pickBestVideo([...teamHits, ...general], title);
+  let best = pickBestVideo([...marcus, ...fia, ...general], title);
 
-  // 관련 영상 없으면 전체에서 재생수 최다
+  // 관련 영상 없으면 일반 검색에서 재생수 최다
   if (!best) {
-    const loose = [...teamHits, ...general]
+    const loose = [...general, ...marcus, ...fia]
       .filter((v) => v?.id)
       .sort((a, b) => viewsOf(b) - viewsOf(a))[0];
     best = loose || null;
@@ -187,7 +143,6 @@ async function resolveOneSong(song) {
     channel: best.channel?.name,
     views: viewsOf(best),
     preferredArtist: isPreferredArtist(best),
-    worshipTeam: matchedWorshipTeam(best),
     url: `https://www.youtube.com/watch?v=${best.id}`,
   };
 }
