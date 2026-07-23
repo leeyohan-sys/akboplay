@@ -20,7 +20,15 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400,
+  }),
+);
+app.options('*', cors());
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', (_req, res) => {
@@ -28,6 +36,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
+    version: 'ocr-lite-20260723',
   });
 });
 
@@ -37,10 +46,11 @@ app.get('/api/demo', (_req, res) => {
 
 /** PDF 악보 업로드 → 곡 후보 추출 */
 app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
+  // Render 프록시 타임아웃(~55s) 전에 반드시 응답
+  res.setTimeout(50000);
   try {
     const fileName = req.file?.originalname || req.body?.fileName || 'score.pdf';
 
-    // 명시적 데모만 허용 (파일 없이 오면 더 이상 조용히 데모 반환하지 않음)
     if (!req.file) {
       if (fileName === 'demo-score.pdf' || req.body?.demo === '1') {
         return res.json(getDemoResult(fileName));
@@ -54,10 +64,28 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
     console.log(
       `[analyze] ${fileName} (${req.file.size} bytes, ${req.file.mimetype})`,
     );
-    const result = await analyzePdfBuffer(req.file.buffer, fileName);
+
+    const result = await Promise.race([
+      analyzePdfBuffer(req.file.buffer, fileName),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('분석 시간이 초과되었습니다.')),
+          45000,
+        ),
+      ),
+    ]);
     return res.json(result);
   } catch (err) {
     console.error('[analyze]', err);
+    // 타임아웃/OCR 실패여도 앱이 멈추지 않도록 빈 목록 반환
+    if (/초과|timeout|aborted/i.test(String(err.message || ''))) {
+      return res.json({
+        fileName: req.file?.originalname || 'score.pdf',
+        method: 'heuristic',
+        note: '서버에서 문서 인식이 오래 걸려 중단되었습니다. 곡을 직접 추가해 주세요.',
+        songs: [],
+      });
+    }
     return res.status(500).json({
       error: err.message || 'PDF 분석에 실패했습니다.',
     });

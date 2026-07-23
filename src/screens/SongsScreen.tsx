@@ -140,11 +140,7 @@ export function SongsScreen({ navigation, route }: Props) {
       footer={
         <View style={styles.footerInner}>
           <PrimaryButton
-            label={
-              matching
-                ? '유튜브에서 곡 검색 중…'
-                : '유튜브 앱으로 플레이리스트 만들기'
-            }
+            label={matching ? '유튜브에서 곡 검색 중…' : '유튜브 목록 만들기'}
             onPress={createPlaylistNow}
             loading={matching}
             disabled={selectedCount === 0}
@@ -166,9 +162,12 @@ export function SongsScreen({ navigation, route }: Props) {
                 : 'PDF 분석'}{' '}
           · {selectedCount}곡 선택
         </Text>
+        {analyze.note ? (
+          <Text style={styles.busyHint}>{analyze.note}</Text>
+        ) : null}
         {matching ? (
           <Text style={styles.busyHint}>
-            새 창에서 유튜브 곡을 찾는 중입니다. 잠시만 기다려 주세요…
+            유튜브에서 곡을 찾는 중입니다. 잠시만 기다려 주세요…
           </Text>
         ) : null}
       </View>
@@ -260,7 +259,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     backgroundColor: colors.ink,
     color: colors.cream,
-    fontFamily: 'NotoSansKR_400Regular',
+    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
     fontSize: 15,
     borderWidth: 1,
     borderColor: 'rgba(143, 163, 191, 0.25)',

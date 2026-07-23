@@ -14,7 +14,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenShell } from '../components/ScreenShell';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
-import { api } from '../services/api';
+import { api, pickPdfFileWeb } from '../services/api';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -28,11 +28,13 @@ export function HomeScreen({ navigation }: Props) {
   const pulse = React.useRef(new Animated.Value(0)).current;
   const fade = React.useRef(new Animated.Value(0)).current;
 
-  // PC 웹에서 원이 화면을 밀어내지 않도록 크기 제한
-  const heroSize = useMemo(
-    () => Math.min(Math.max(width * 0.28, 120), Math.min(200, height * 0.22)),
-    [width, height],
-  );
+  // 작은 폰 화면에서도 버튼이 보이도록 히어로 크기 축소
+  const compact = height < 720;
+  const heroSize = useMemo(() => {
+    const maxByHeight = compact ? height * 0.16 : height * 0.22;
+    const maxByWidth = width * (compact ? 0.32 : 0.28);
+    return Math.min(Math.max(maxByWidth, compact ? 88 : 120), Math.min(compact ? 140 : 200, maxByHeight));
+  }, [width, height, compact]);
 
   useEffect(() => {
     Animated.parallel([
@@ -71,36 +73,62 @@ export function HomeScreen({ navigation }: Props) {
   const pickPdf = async () => {
     setError(null);
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-
-      if (result.canceled || !result.assets?.[0]) return;
-
-      const asset = result.assets[0];
       setLoading(true);
 
-      const analyzed = await api.analyzePdf(
-        asset.uri,
-        asset.name || 'score.pdf',
-        (asset as { file?: File }).file ?? null,
-      );
-
-      if (analyzed.method === 'demo') {
-        throw new Error(
-          '서버가 데모 응답을 반환했습니다. API 서버를 재시작한 뒤 다시 첨부해 주세요.',
+      let analyzed;
+      if (Platform.OS === 'web') {
+        // 모바일 웹에서는 네이티브 file input이 가장 안정적
+        const file = await pickPdfFileWeb();
+        if (!file) {
+          setLoading(false);
+          return;
+        }
+        analyzed = await api.analyzePdfFile(file);
+      } else {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          copyToCacheDirectory: true,
+          multiple: false,
+        });
+        if (result.canceled || !result.assets?.[0]) {
+          setLoading(false);
+          return;
+        }
+        const asset = result.assets[0];
+        analyzed = await api.analyzePdf(
+          asset.uri,
+          asset.name || 'score.pdf',
+          (asset as { file?: File }).file ?? null,
         );
       }
 
+      if (analyzed.method === 'demo') {
+        throw new Error(
+          '서버가 데모 응답을 반환했습니다. 잠시 후 다시 시도해 주세요.',
+        );
+      }
+
+      // 인식 실패해도 곡 직접 추가 화면으로 진행
       navigation.navigate('Songs', { analyze: analyzed });
     } catch (e) {
       const message =
         e instanceof Error ? e.message : 'PDF 분석 중 오류가 발생했습니다.';
+      // 서버 502 등으로 실패해도 직접 추가할 수 있게 안내 화면으로
+      if (/중단|시간|연결|Bad Gateway|502|503|504/i.test(message)) {
+        navigation.navigate('Songs', {
+          analyze: {
+            fileName: 'score.pdf',
+            method: 'heuristic',
+            note: message,
+            songs: [],
+          },
+        });
+        setError(message);
+        return;
+      }
       setError(
         serverOk === false
-          ? `${message}\n서버가 실행 중인지 확인하세요. (npm run server)`
+          ? `${message}\n서버 연결을 확인해 주세요.`
           : message,
       );
     } finally {
@@ -189,8 +217,10 @@ export function HomeScreen({ navigation }: Props) {
       >
         <Animated.View style={{ opacity: fade }}>
           <Text style={styles.eyebrow}>PDF SCORE → YOUTUBE</Text>
-          <Text style={typography.brand}>악보플레이</Text>
-          <Text style={[typography.body, styles.sub]}>
+          <Text style={[typography.brand, compact && styles.brandCompact]}>
+            악보플레이
+          </Text>
+          <Text style={[typography.body, styles.sub, compact && styles.subCompact]}>
             악보 PDF를 올리면 곡을 찾아{'\n'}유튜브 플레이리스트로 만들어 드립니다.
           </Text>
 
@@ -201,6 +231,7 @@ export function HomeScreen({ navigation }: Props) {
                 width: heroSize,
                 height: heroSize,
                 borderRadius: heroSize / 2,
+                marginVertical: compact ? 16 : 28,
               },
             ]}
           >
@@ -227,23 +258,31 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingHorizontal: 28,
-    paddingTop: Platform.OS === 'web' ? 28 : 36,
-    paddingBottom: 24,
+    paddingHorizontal: 22,
+    paddingTop: Platform.OS === 'web' ? 20 : 36,
+    paddingBottom: 16,
     maxWidth: 560,
     width: '100%',
     alignSelf: 'center',
   },
   eyebrow: {
-    fontFamily: 'NotoSansKR_500Medium',
+    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
     fontSize: 11,
     letterSpacing: 2.4,
     color: colors.brass,
     marginBottom: 10,
   },
+  brandCompact: {
+    fontSize: 28,
+  },
   sub: {
     marginTop: 14,
     marginBottom: 8,
+  },
+  subCompact: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
   },
   heroMark: {
     alignSelf: 'center',
@@ -259,7 +298,7 @@ const styles = StyleSheet.create({
     marginTop: -8,
   },
   actions: {
-    gap: 12,
+    gap: 10,
     maxWidth: 560,
     width: '100%',
     alignSelf: 'center',
@@ -272,8 +311,9 @@ const styles = StyleSheet.create({
   },
   serverHint: {
     ...typography.caption,
-    marginTop: 20,
+    marginTop: 16,
     textAlign: 'center',
+    fontSize: 11,
   },
   staffWrap: {
     position: 'absolute',

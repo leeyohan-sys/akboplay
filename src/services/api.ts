@@ -7,7 +7,6 @@ function resolveApiBase(): string {
   const fromEnv = process.env.EXPO_PUBLIC_API_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
 
-  // GitHub Pages 배포본은 공개 API 사용
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     const host = window.location.hostname;
     if (host.endsWith('github.io')) {
@@ -33,6 +32,26 @@ function resolveApiBase(): string {
 
 const API_BASE = resolveApiBase();
 
+function friendlyFetchError(e: unknown): Error {
+  if (e instanceof Error && e.name === 'AbortError') {
+    return new Error(
+      '요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요. (스캔 PDF는 인식에 시간이 걸릴 수 있습니다)',
+    );
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+    return new Error(
+      '서버에 연결하지 못했습니다. 네트워크를 확인하거나 잠시 후 다시 시도해 주세요.',
+    );
+  }
+  if (/502|503|504|bad gateway/i.test(msg)) {
+    return new Error(
+      '서버가 문서를 처리하다 중단되었습니다. 잠시 후 다시 시도하거나 곡을 직접 추가해 주세요.',
+    );
+  }
+  return e instanceof Error ? e : new Error(msg);
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit & { timeoutMs?: number },
@@ -48,25 +67,43 @@ async function request<T>(
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (res.status >= 502 && res.status <= 504) {
+        throw new Error(`Bad Gateway (${res.status})`);
+      }
       throw new Error(data.error || data.message || `요청 실패 (${res.status})`);
     }
     return data as T;
   } catch (e) {
-    if (e instanceof Error && e.name === 'AbortError') {
-      throw new Error(
-        '요청 시간이 초과되었습니다. API 서버(npm run server)가 실행 중인지 확인하세요.',
-      );
-    }
-    throw e;
+    throw friendlyFetchError(e);
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * 웹에서는 { uri, name, type } FormData가 동작하지 않아
- * 실제 Blob/File로 변환해 업로드합니다.
- */
+async function blobFromUri(uri: string): Promise<Blob> {
+  // 모바일 일부 브라우저는 blob: URL fetch가 실패함 → XHR 폴백
+  try {
+    const res = await fetch(uri);
+    if (!res.ok) throw new Error('fetch failed');
+    return await res.blob();
+  } catch {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', uri, true);
+      xhr.responseType = 'blob';
+      xhr.onload = () => {
+        if (xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) {
+          resolve(xhr.response);
+        } else {
+          reject(new Error('PDF 파일을 읽지 못했습니다.'));
+        }
+      };
+      xhr.onerror = () => reject(new Error('PDF 파일을 읽지 못했습니다.'));
+      xhr.send();
+    });
+  }
+}
+
 async function buildPdfFormData(
   uri: string,
   fileName: string,
@@ -80,11 +117,7 @@ async function buildPdfFormData(
     if (file) {
       blob = file;
     } else {
-      const res = await fetch(uri);
-      if (!res.ok) {
-        throw new Error('선택한 PDF를 읽지 못했습니다. 다시 첨부해 주세요.');
-      }
-      blob = await res.blob();
+      blob = await blobFromUri(uri);
     }
 
     if (!blob || blob.size < 20) {
@@ -93,13 +126,14 @@ async function buildPdfFormData(
 
     const pdfFile =
       typeof File !== 'undefined'
-        ? new File([blob], name, { type: 'application/pdf' })
+        ? new File([blob], name, {
+            type: blob.type || 'application/pdf',
+          })
         : blob;
     form.append('pdf', pdfFile, name);
     return form;
   }
 
-  // React Native (iOS/Android)
   form.append('pdf', {
     uri,
     name,
@@ -108,12 +142,53 @@ async function buildPdfFormData(
   return form;
 }
 
+/** 웹 전용: 안정적인 네이티브 파일 선택기 */
+export function pickPdfFileWeb(): Promise<File | null> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(null);
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/pdf,.pdf';
+    input.style.display = 'none';
+    const cleanup = () => {
+      input.onchange = null;
+      input.remove();
+    };
+    input.onchange = () => {
+      const file = input.files?.[0] ?? null;
+      cleanup();
+      resolve(file);
+    };
+    // 취소 감지 (대략)
+    window.addEventListener(
+      'focus',
+      () => {
+        setTimeout(() => {
+          if (!input.files?.length) {
+            cleanup();
+            resolve(null);
+          }
+        }, 600);
+      },
+      { once: true },
+    );
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 export const api = {
   baseUrl: API_BASE,
 
-  health: () => request<{ ok: boolean; youtubeConfigured: boolean }>('/api/health'),
+  health: () =>
+    request<{ ok: boolean; youtubeConfigured: boolean }>('/api/health', {
+      timeoutMs: 60000,
+    }),
 
-  demo: () => request<AnalyzeResult>('/api/demo'),
+  demo: () => request<AnalyzeResult>('/api/demo', { timeoutMs: 60000 }),
 
   analyzePdf: async (
     uri: string,
@@ -125,7 +200,18 @@ export const api = {
     return request<AnalyzeResult>('/api/analyze', {
       method: 'POST',
       body: form,
-      // Content-Type은 FormData가 boundary 포함해 자동 설정
+      timeoutMs: 120000,
+    });
+  },
+
+  /** 웹에서 File 객체를 바로 업로드 */
+  analyzePdfFile: async (file: File): Promise<AnalyzeResult> => {
+    const form = new FormData();
+    form.append('pdf', file, file.name || 'score.pdf');
+    return request<AnalyzeResult>('/api/analyze', {
+      method: 'POST',
+      body: form,
+      timeoutMs: 120000,
     });
   },
 
@@ -136,7 +222,6 @@ export const api = {
       body: JSON.stringify({ songs }),
     }),
 
-  /** API 키 없이 곡 검색 후 유튜브 연속재생(플레이리스트) URL 생성 */
   autoPlaylist: (payload: {
     title: string;
     songs: { id: string; title: string; composer?: string; number?: string }[];
@@ -157,7 +242,6 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      // 곡 수에 따라 검색이 길어질 수 있어 여유 타임아웃
       timeoutMs: 120000,
     }),
 

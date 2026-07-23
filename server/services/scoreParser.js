@@ -136,8 +136,12 @@ function extractSongsFromText(text) {
   );
 }
 
-/** 페이지 이미지를 OCR (스캔본 보강) */
-async function ocrPdfPages(buffer) {
+/** 페이지 이미지를 OCR (스캔본 보강) — Render 무료 플랜 한도 내로 가볍게 */
+async function ocrPdfPages(buffer, options = {}) {
+  const maxMs = options.maxMs ?? 35000;
+  const started = Date.now();
+  const timedOut = () => Date.now() - started > maxMs;
+
   let sharp;
   let Tesseract;
   try {
@@ -148,16 +152,26 @@ async function ocrPdfPages(buffer) {
   }
 
   const parser = new PDFParse({ data: buffer });
+  let worker;
   try {
     const shot = await parser.getScreenshot({
-      first: 6,
-      scale: 2.2,
+      first: 3,
+      scale: 1.5,
       imageBuffer: true,
       imageDataUrl: false,
     });
 
+    worker = await Tesseract.createWorker('kor+eng', 1, {
+      logger: () => undefined,
+    });
+
     const chunks = [];
     for (const page of shot.pages || []) {
+      if (timedOut()) {
+        console.warn('[analyze] OCR 시간 제한 — 부분 결과 사용');
+        break;
+      }
+
       const img = Buffer.from(page.data);
       const meta = await sharp(img).metadata();
       const h = meta.height || 0;
@@ -165,46 +179,53 @@ async function ocrPdfPages(buffer) {
       if (!h || !w) continue;
 
       const landscape = w > h;
-      // 가로 악보(좌우 2곡) / 세로 악보(상하 2곡) 모두 커버
+      // 제목은 보통 상단(가로면 좌·우 각각)에만 있음 — 전체 페이지 OCR은 하지 않음
       const regions = landscape
         ? [
-            { left: 0, top: 0, width: Math.floor(w * 0.5), height: Math.floor(h * 0.28) },
-            { left: Math.floor(w * 0.5), top: 0, width: Math.floor(w * 0.5), height: Math.floor(h * 0.28) },
-            { left: 0, top: Math.floor(h * 0.08), width: w, height: Math.floor(h * 0.22) },
+            {
+              left: 0,
+              top: 0,
+              width: Math.floor(w * 0.52),
+              height: Math.floor(h * 0.3),
+            },
+            {
+              left: Math.floor(w * 0.48),
+              top: 0,
+              width: Math.floor(w * 0.52),
+              height: Math.floor(h * 0.3),
+            },
           ]
         : [
-            { left: 0, top: 0, width: w, height: Math.floor(h * 0.22) },
-            { left: 0, top: Math.floor(h * 0.45), width: w, height: Math.floor(h * 0.2) },
+            { left: 0, top: 0, width: w, height: Math.floor(h * 0.24) },
+            {
+              left: 0,
+              top: Math.floor(h * 0.42),
+              width: w,
+              height: Math.floor(h * 0.22),
+            },
           ];
 
       for (const region of regions) {
+        if (timedOut()) break;
         try {
-          const crop = await sharp(img).extract(region).png().toBuffer();
-          const result = await Tesseract.recognize(crop, 'kor+eng', {
-            logger: () => undefined,
-          });
+          const crop = await sharp(img)
+            .extract(region)
+            .grayscale()
+            .normalize()
+            .png()
+            .toBuffer();
+          const result = await worker.recognize(crop);
           if (result?.data?.text) chunks.push(result.data.text);
         } catch {
           // 개별 영역 실패는 무시
         }
       }
 
-      // 스캔 악보는 전체 페이지 OCR이 제목 인식에 더 안정적
-      try {
-        const full = await sharp(img)
-          .resize({ width: Math.min(w, 1600), withoutEnlargement: true })
-          .png()
-          .toBuffer();
-        const result = await Tesseract.recognize(full, 'kor+eng', {
-          logger: () => undefined,
-        });
-        if (result?.data?.text) chunks.push(result.data.text);
-      } catch {
-        // ignore
-      }
+      // 시간 여유 있으면 다음 페이지도 계속 (Render 한도 내)
     }
     return chunks.join('\n');
   } finally {
+    if (worker) await worker.terminate().catch(() => undefined);
     await parser.destroy().catch(() => undefined);
   }
 }
@@ -238,7 +259,7 @@ async function analyzePdfBuffer(buffer, fileName) {
       ? extractSongsFromText(text)
       : [];
 
-  // 페이지 마커만 있거나 잡음 제목만 있으면 OCR 강제
+  // 페이지 마커만 있거나 잡음 제목만 있으면 OCR
   songs = songs.filter((s) => !isPageMarker(s.title) && !isJunkTitle(s.title));
 
   const needsOcr =
@@ -250,7 +271,7 @@ async function analyzePdfBuffer(buffer, fileName) {
   if (needsOcr) {
     try {
       console.log('[analyze] OCR 시작…');
-      const ocrText = await ocrPdfPages(buffer);
+      const ocrText = await ocrPdfPages(buffer, { maxMs: 35000 });
       if (ocrText && ocrText.trim().length > 20) {
         text = `${text}\n${ocrText}`;
         songs = extractSongsFromText(text).filter(
@@ -265,19 +286,20 @@ async function analyzePdfBuffer(buffer, fileName) {
   }
 
   // 파일명을 곡으로 쓰지 않음 (Adobe Scan 2026. 7. 17. 등)
-  songs = songs.filter((s) => !isJunkFileName(s.title) && !isPageMarker(s.title));
+  songs = songs.filter(
+    (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
+  );
 
   if (songs.length === 0) {
     return {
       fileName,
       method: method === 'ocr' ? 'ocr' : 'heuristic',
       rawTextPreview: text.slice(0, 400),
-      note: '곡 제목을 자동으로 찾지 못했습니다. 직접 추가해 주세요.',
+      note: '곡 제목을 자동으로 찾지 못했습니다. 아래에서 직접 추가해 주세요.',
       songs: [],
     };
   }
 
-  // 찬송가/CCM이면 YouTube 검색에 도움이 되도록 표시
   const hymnal = songs.some((s) =>
     Boolean(s.number || /찬송|은혜|하나님|예수|예배|푯대|교회/.test(s.title)),
   );
