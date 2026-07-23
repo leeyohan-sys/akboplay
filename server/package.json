@@ -1,0 +1,33 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "악보플레이 PDF 분석 · YouTube API 서버",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "sheet-music",
+    "youtube",
+    "playlist"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "googleapis": "^173.0.0",
+    "multer": "^2.2.0",
+    "pdf-parse": "^2.4.5",
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0",
+    "uuid": "^14.0.1",
+    "youtube-sr": "^4.3.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
