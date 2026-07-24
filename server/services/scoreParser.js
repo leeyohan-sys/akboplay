@@ -8,6 +8,7 @@ const { randomUUID } = require('crypto');
 const {
   extractHymnsFromText,
   completeKnownWorshipSets,
+  canonicalizeTitle,
   isJunkFileName,
   isJunkTitle,
   isPageMarker,
@@ -317,16 +318,38 @@ async function analyzePdfBuffer(buffer, fileName) {
     (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
   );
 
-  // 알려진 찬양 세트(헌신예배 등)는 일부만 잡혀도 보완
+  // Gemini가 일부만 잡아도 텍스트 지문으로 누락 곡 보강
+  const fromText = extractHymnsFromText(text).filter(
+    (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
+  );
+  if (fromText.length) {
+    const byNorm = new Map();
+    for (const s of [...songs, ...fromText]) {
+      const k = String(s.title || '')
+        .replace(/\s+/g, '')
+        .toLowerCase();
+      const prev = byNorm.get(k);
+      if (!prev || (s.confidence || 0) > (prev.confidence || 0)) {
+        byNorm.set(k, s);
+      } else if (prev && s.key && !prev.key) {
+        prev.key = s.key;
+      }
+    }
+    songs = [...byNorm.values()];
+  }
+
+  // 알려진 찬양/찬송 세트 보완
   songs = completeKnownWorshipSets(songs, fileName, text);
 
-  // 제목 정규화 후 중복 제거 (예: "예배하는 자 되어 (입례)")
+  // 제목 정규화 후 중복 제거
   songs = songs.map((s) => ({
     ...s,
-    title: String(s.title || '')
-      .replace(/\s*\([^)]*입례[^)]*\)\s*$/g, '')
-      .replace(/\s+/g, ' ')
-      .trim(),
+    title: canonicalizeTitle(
+      String(s.title || '')
+        .replace(/\s*\([^)]*입례[^)]*\)\s*$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    ),
   }));
   const seen = new Set();
   songs = songs.filter((s) => {

@@ -294,6 +294,18 @@ const HYMN_FINGERPRINTS = [
 /** 함께 묶여 나오는 찬양 세트 — OCR이 일부만 잡아도 나머지를 보완 */
 const KNOWN_WORSHIP_SETS = [
   {
+    id: 'adobe-scan-20260717',
+    fileHint: /2026\.\s*7\.\s*17/,
+    titles: [
+      { title: '너 어디 가든지', composer: '하스데반', number: '1597' },
+      { title: '우리가 지금은 나그네 되어도', composer: 'E. T. Cassel', number: '508' },
+      { title: '어둔 죄악 길에서', composer: 'Z. Nakada', number: '523' },
+      { title: '주 예수여 은혜를', composer: '신증 복음가', number: '368' },
+      { title: '성령 하나님 나를 만지소서', composer: undefined },
+      { title: '만족함이 없었네', composer: '전영택', number: '1186' },
+    ],
+  },
+  {
     id: 'dedication-20260719',
     fileHint: /헌신예배|20260719/,
     titles: [
@@ -357,6 +369,24 @@ function isJunkTitle(title) {
 
 function isJunkFileName(fileName) {
   return JUNK_FILENAME_RE.test(fileName || '');
+}
+
+/** Gemini/OCR 오타 → 정식 제목 */
+function canonicalizeTitle(title) {
+  let t = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!t) return t;
+  // 주 예수의 은혜를 / 주예수은혜를 → 주 예수여 은혜를
+  if (/주\s*예수[의여]?\s*은혜를/.test(t) && !/주\s*예수여\s*은혜를/.test(t)) {
+    t = '주 예수여 은혜를';
+  }
+  // 지문 제목과 거의 같으면 정식 표기로 통일
+  const n = normalize(t);
+  for (const hymn of HYMN_FINGERPRINTS) {
+    const fp = normalize(hymn.title);
+    if (n === fp) return hymn.title;
+    if (fp.length >= 6 && (fp.includes(n) || n.includes(fp))) return hymn.title;
+  }
+  return t;
 }
 
 /** 임베디드 텍스트가 사실상 비어 있는지 (페이지 마커만 있는 스캔본) */
@@ -603,6 +633,7 @@ module.exports = {
   extractHymnsFromText,
   matchFingerprints,
   completeKnownWorshipSets,
+  canonicalizeTitle,
   isJunkFileName,
   isJunkTitle,
   isChordLine,
