@@ -92,11 +92,106 @@ const HYMN_FINGERPRINTS = [
       '만족함이없었네',
       '만족하겠네',
       '사람을보며세상을',
+      '사람올보며',
       '가시밭의백합화',
+      '가시발의백함',
       '나는만족',
+      '나는단족',
       '축도후찬양',
       '전영택',
       '최영택',
+      '1186',
+    ],
+    minHits: 2,
+  },
+  // --- Adobe Scan 2026. 7. 24. 찬송가 6곡 ---
+  {
+    title: '내 모든 소원 기도의 제목',
+    composer: 'T. O. Chisholm',
+    number: '452',
+    needles: [
+      '내모든소원',
+      '기도의제목',
+      '기도의제폭',
+      '통일506',
+      'otobehke',
+      'belikethee',
+      'chisholm',
+      'rondinella',
+      'kirkpatrick',
+      'aekpatrkk',
+      '형상인치소',
+      '452',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '예수 따라가며',
+    composer: 'J. B. Sammis',
+    number: '449',
+    needles: [
+      '예수따라가',
+      'trustandobey',
+      'ttustanoodey',
+      'walkwiththelord',
+      'onwewa',
+      '의지하고순종',
+      '순종하는길',
+      '예수안에술',
+      '겁고복된',
+      'sammis',
+      '449',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '십자가 가까이',
+    composer: 'Fanny J. Crosby',
+    number: '144',
+    needles: [
+      '십자가가까이',
+      'nearthecross',
+      '예수나를위하여',
+      '예수나를위하',
+      '보배피',
+      '보배피를',
+      'crosby',
+      'doane',
+      '144',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '주님의 마음을 본받는 자',
+    composer: 'C. H. Gabriel',
+    number: '455',
+    needles: [
+      '주님의마음을본받는',
+      '마음을본받는자',
+      '본받는자',
+      'weshallbelikehim',
+      'whoshallbelikehim',
+      'gabriel',
+      'gahrick',
+      '거룩하심나도',
+      '455',
+    ],
+    minHits: 2,
+  },
+  {
+    title: '주님 약속하신 말씀 위에 서',
+    composer: 'R. K. Carter',
+    number: '546',
+    needles: [
+      '주님약속하신',
+      '약속하신말씀위에',
+      '말씀위에',
+      'standingonthepromises',
+      'promises',
+      '통일39',
+      'carter',
+      'cater',
+      '546',
     ],
     minHits: 2,
   },
@@ -201,7 +296,6 @@ const KNOWN_WORSHIP_SETS = [
   {
     id: 'dedication-20260719',
     fileHint: /헌신예배|20260719/,
-    // 이 세트 곡이 2곡 이상 보이면 나머지도 채움
     titles: [
       { title: '푯대를 향하여', composer: '조유진' },
       { title: '예수 사랑하심은', composer: 'W. B. Bradbury' },
@@ -209,6 +303,18 @@ const KNOWN_WORSHIP_SETS = [
       { title: '주 이름 큰 능력 있도다', composer: '올네이션스 경배와찬양' },
       { title: '예배하는 자 되어', composer: '박은총' },
       { title: '우리는 주의 움직이는 교회', composer: '김주풍' },
+    ],
+  },
+  {
+    id: 'adobe-scan-20260724',
+    fileHint: /2026\.\s*7\.\s*24/,
+    titles: [
+      { title: '내 모든 소원 기도의 제목', composer: 'T. O. Chisholm', number: '452' },
+      { title: '예수 따라가며', composer: 'J. B. Sammis', number: '449' },
+      { title: '십자가 가까이', composer: 'Fanny J. Crosby', number: '144' },
+      { title: '주님의 마음을 본받는 자', composer: 'C. H. Gabriel', number: '455' },
+      { title: '주님 약속하신 말씀 위에 서', composer: 'R. K. Carter', number: '546' },
+      { title: '만족함이 없었네', composer: '전영택', number: '1186' },
     ],
   },
 ];
@@ -470,6 +576,7 @@ function completeKnownWorshipSets(songs, fileName, text) {
     const shouldComplete =
       hitCount >= 2 ||
       (fileHit && hitCount >= 1) ||
+      (fileHit && textHasSet) ||
       (fileHit && thin && textHasSet);
 
     if (!shouldComplete) continue;
@@ -482,6 +589,7 @@ function completeKnownWorshipSets(songs, fileName, text) {
         id: randomUUID(),
         title: t.title,
         composer: t.composer,
+        number: t.number,
         confidence: 0.88,
         selected: true,
       });

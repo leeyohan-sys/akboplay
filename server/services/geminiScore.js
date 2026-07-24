@@ -130,13 +130,15 @@ async function extractSongsWithGemini(buffer, fileName) {
     return null;
   }
 
-  const prompt = `교회 찬양/악보 PDF 이미지입니다. 곡 제목과 조성(Key)을 JSON 배열로 추출하세요.
+  const prompt = `교회 찬양/악보 PDF 이미지입니다. 곡 제목·조성(Key)·찬송가 번호를 JSON 배열로 추출하세요.
 파일: ${fileName || 'score.pdf'}
 규칙:
-- 곡 제목만. 가사·코드나열·페이지번호 제외.
-- key는 악보에 표시된 조성 (예: G, C, D, Bb, Em). Capo 숫자만 있으면 "".
+- 곡 제목만. 가사 한 줄·코드나열·페이지번호·"보통으로"·"후렴"은 제외.
+- 찬송가 번호(예: 452, 449, 144)가 보이면 number에 넣으세요.
+- 영문 원제(Near the Cross, Trust and Obey 등)가 보이면 한국어 정식 제목으로 바꾸세요.
+- key는 조성 (G, C, Bb, Em). Capo 숫자만 있으면 "".
 - composer/number/key 없으면 "".
-출력 예: [{"title":"곡명","composer":"","number":"","key":"G"}]
+출력 예: [{"title":"곡명","composer":"","number":"452","key":"G"}]
 설명 없이 JSON만.`;
 
   const parts = [
