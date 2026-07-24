@@ -1,7 +1,7 @@
 /**
  * 악보 PDF에서 곡 제목/작곡가 후보를 추출합니다.
- * - 텍스트 PDF: pdf-parse + 찬송가 지문
- * - 스캔본: Gemini(우선) → Tesseract OCR 폴백
+ * - 모든 PDF: Gemini로 곡 제목/조성 추출 (우선)
+ * - 실패 시: pdf-parse 텍스트 / Tesseract OCR 폴백
  */
 const { PDFParse } = require('pdf-parse');
 const { randomUUID } = require('crypto');
@@ -260,43 +260,41 @@ async function analyzePdfBuffer(buffer, fileName) {
   }
 
   let method = 'text';
-  let songs =
-    text.length >= 10 && !isThinPdfText(text)
-      ? extractSongsFromText(text)
-      : [];
+  let songs = [];
 
-  // 페이지 마커만 있거나 곡이 부족하면 Gemini → OCR
-  songs = songs.filter((s) => !isPageMarker(s.title) && !isJunkTitle(s.title));
-
-  const needsVision =
-    isThinPdfText(text) ||
-    songs.length === 0 ||
-    songs.every((s) => s.confidence < 0.7) ||
-    (isJunkFileName(fileName) && songs.length === 0);
-
-  if (needsVision) {
-    // 1) Gemini (키가 있으면 OCR보다 우선 — 스캔 악보에 강함)
-    if (isGeminiConfigured()) {
-      try {
-        console.log('[analyze] Gemini 인식 시작…');
-        const gemini = await extractSongsWithGemini(buffer, fileName);
-        if (gemini?.songs?.length) {
-          songs = gemini.songs.filter(
-            (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
-          );
-          text = `${text}\n${gemini.rawText || ''}`;
-          method = 'gemini';
-          console.log(`[analyze] Gemini 완료 · 후보 ${songs.length}곡`);
-        }
-      } catch (err) {
-        console.warn('[analyze] Gemini 실패:', err.message);
+  // 1) 모든 PDF에 Gemini 우선 (키 설정 시)
+  if (isGeminiConfigured()) {
+    try {
+      console.log('[analyze] Gemini 인식 시작…');
+      const gemini = await extractSongsWithGemini(buffer, fileName);
+      if (gemini?.songs?.length) {
+        songs = gemini.songs.filter(
+          (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
+        );
+        text = `${text}\n${gemini.rawText || ''}`;
+        method = 'gemini';
+        console.log(`[analyze] Gemini 완료 · 후보 ${songs.length}곡`);
       }
+    } catch (err) {
+      console.warn('[analyze] Gemini 실패:', err.message);
     }
+  }
 
-    // 2) Gemini가 비었으면 Tesseract OCR 폴백
-    if (songs.length === 0) {
+  // 2) Gemini 실패/미설정 시 텍스트·OCR 폴백
+  if (songs.length === 0) {
+    songs =
+      text.length >= 10 && !isThinPdfText(text)
+        ? extractSongsFromText(text)
+        : [];
+    songs = songs.filter((s) => !isPageMarker(s.title) && !isJunkTitle(s.title));
+
+    if (
+      songs.length === 0 ||
+      songs.every((s) => s.confidence < 0.7) ||
+      isThinPdfText(text)
+    ) {
       try {
-        console.log('[analyze] OCR 시작…');
+        console.log('[analyze] OCR 폴백 시작…');
         const ocrText = await ocrPdfPages(buffer, { maxMs: 35000 });
         if (ocrText && ocrText.trim().length > 20) {
           text = `${text}\n${ocrText}`;
@@ -309,6 +307,8 @@ async function analyzePdfBuffer(buffer, fileName) {
       } catch (err) {
         console.warn('[analyze] OCR 실패:', err.message);
       }
+    } else if (method !== 'gemini') {
+      method = 'text';
     }
   }
 
@@ -317,7 +317,7 @@ async function analyzePdfBuffer(buffer, fileName) {
     (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
   );
 
-  // 알려진 찬양 세트(헌신예배 등)는 OCR이 일부만 잡아도 보완
+  // 알려진 찬양 세트(헌신예배 등)는 일부만 잡혀도 보완
   songs = completeKnownWorshipSets(songs, fileName, text);
 
   // 제목 정규화 후 중복 제거 (예: "예배하는 자 되어 (입례)")
@@ -339,19 +339,16 @@ async function analyzePdfBuffer(buffer, fileName) {
   if (songs.length === 0) {
     return {
       fileName,
-      method: method === 'ocr' ? 'ocr' : 'heuristic',
+      method: method === 'ocr' || method === 'gemini' ? method : 'heuristic',
       rawTextPreview: text.slice(0, 400),
       note: '곡 제목을 자동으로 찾지 못했습니다. 아래에서 직접 추가해 주세요.',
       songs: [],
     };
   }
 
-  const hymnal = songs.some((s) =>
-    Boolean(s.number || /찬송|은혜|하나님|예수|예배|푯대|교회/.test(s.title)),
-  );
   return {
     fileName,
-    method: hymnal && method === 'text' ? 'hymn' : method,
+    method,
     rawTextPreview: text.slice(0, 400),
     songs,
   };
