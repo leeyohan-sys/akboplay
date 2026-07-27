@@ -386,6 +386,18 @@ const KNOWN_WORSHIP_SETS = [
     ],
   },
   {
+    id: 'juil-ohu-20260707',
+    fileHint: /20260707|주일오후예배/,
+    titles: [
+      { title: '주님의 선하심', composer: undefined },
+      { title: '거리마다 기쁨으로', composer: undefined },
+      { title: '나는 아네 내가 살아가는 이유', composer: undefined },
+      { title: '할 수 있다 하신 이는', composer: undefined },
+      { title: '아무것도 두려워 말라', composer: undefined },
+      { title: '하나님의 사랑을', composer: undefined },
+    ],
+  },
+  {
     id: 'adobe-scan-20260605',
     fileHint: /2026\.\s*6\.\s*0?5/,
     titles: [

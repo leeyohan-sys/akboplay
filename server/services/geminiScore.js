@@ -128,7 +128,8 @@ async function extractSongsWithGemini(buffer, fileName) {
     'gemini-2.5-flash',
   ];
 
-  const images = await pdfPagesToJpegs(buffer, { first: 3, scale: 1.25 });
+  // 주일 예배 악보는 4페이지 이상인 경우가 많아 앞 6페이지까지 전송
+  const images = await pdfPagesToJpegs(buffer, { first: 6, scale: 1.25 });
   if (images.length === 0) {
     console.warn('[gemini] PDF 페이지 이미지 생성 실패');
     return null;
