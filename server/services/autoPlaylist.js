@@ -1,13 +1,22 @@
 /**
  * API 키 없이 유튜브 검색 → videoId 수집 → 재생목록 URL 생성
- * 우선순위: 제목 관련 영상 중 조회수 최다 (동점이면 마커스/피아)
- * 속도: 곡별 검색 병렬 + 곡 동시 2개 처리
+ * 우선순위: 한국 대표 워십팀 → 없으면 조회수·인지도 높은 버전
+ * Gemini가 후보 중 최적 영상을 고르고, 실패 시 로컬 랭킹으로 폴백
  */
 const YouTube = require('youtube-sr').default;
 const { formatKeyForSearch } = require('./musicKey');
+const { pickVideosWithGemini } = require('./geminiYoutube');
+
+/** 한국 대표 워십팀 (검색·선호 판별) */
+const WORSHIP_TEAMS = [
+  { label: '마커스워십', query: '마커스워십' },
+  { label: '피아워십', query: '피아워십' },
+  { label: '위러브', query: '위러브' },
+  { label: '어노인팅', query: '어노인팅' },
+];
 
 const PREFERRED_ARTIST_RE =
-  /마커스\s*워십|marcus\s*worship|markers\s*worship|\bmarkers\b|피아\s*워십|fia\s*worship|\bf\.?\s*i\.?\s*a\.?\b|마커스워십|피아워십/i;
+  /마커스\s*워십|marcus\s*worship|markers\s*worship|\bmarkers\b|피아\s*워십|fia\s*worship|\bf\.?\s*i\.?\s*a\.?\b|위\s*러브|welove|어\s*노인팅|anointing|아이자야|제이어스|예수전도단|마커스워십|피아워십/i;
 
 const SEARCH_TIMEOUT_MS = 7000;
 
@@ -68,20 +77,19 @@ function isTitleRelevant(video, songTitle) {
   return vt.includes(st);
 }
 
+/** 워십팀 우선 → 제목 관련 → 조회수 */
 function pickBestVideo(candidates, songTitle) {
-  const relevant = candidates.filter(
-    (v) => v?.id && isTitleRelevant(v, songTitle),
-  );
-  if (relevant.length === 0) return null;
+  const withId = (candidates || []).filter((v) => v?.id);
+  if (withId.length === 0) return null;
 
-  // 기존 조건(제목 관련) 충족 후보 중 조회수 최다 우선
-  // 조회수 같으면 마커스/피아를 보조로 선호
-  relevant.sort((a, b) => {
-    const byViews = viewsOf(b) - viewsOf(a);
-    if (byViews !== 0) return byViews;
-    return (isPreferredArtist(b) ? 1 : 0) - (isPreferredArtist(a) ? 1 : 0);
-  });
-  return relevant[0];
+  const relevant = withId.filter((v) => isTitleRelevant(v, songTitle));
+  const pool = relevant.length > 0 ? relevant : withId;
+
+  const preferred = pool.filter((v) => isPreferredArtist(v));
+  const ranked = (preferred.length > 0 ? preferred : pool).slice();
+
+  ranked.sort((a, b) => viewsOf(b) - viewsOf(a));
+  return ranked[0];
 }
 
 async function searchOne(query, limit = 8) {
@@ -102,57 +110,64 @@ async function searchOne(query, limit = 8) {
   }
 }
 
-async function resolveOneSong(song) {
+function dedupeVideos(lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const v of list || []) {
+      const id = v?.id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+/** 곡별 워십팀·일반 검색으로 후보 수집 */
+async function searchCandidatesForSong(song) {
   const title = String(song.title || '').trim();
   if (!title) {
-    return {
-      id: String(song.id || 'empty'),
-      title: song.title,
-      query: '',
-      videoId: null,
-      error: '제목 없음',
-    };
+    return { song, base: '', candidates: [] };
   }
 
   const base = buildQuery(song);
   const keyLabel = formatKeyForSearch(song.key);
-  // 마커스/피아 검색에도 조성 포함: "곡명 G키 마커스워십"
   const titled = keyLabel ? `${title} ${keyLabel}` : title;
 
-  // 3개 검색을 동시에 실행 (속도 개선)
-  const [marcus, fia, general] = await Promise.all([
-    searchOne(`${titled} 마커스워십`, 8),
-    searchOne(`${titled} 피아워십`, 8),
-    searchOne(base, 8),
+  // 대표 워십팀 + 일반(조회수) 검색을 병렬 실행
+  const teamSearches = WORSHIP_TEAMS.map((t) =>
+    searchOne(`${titled} ${t.query}`, 6),
+  );
+  const [teamResults, general] = await Promise.all([
+    Promise.all(teamSearches),
+    searchOne(base, 10),
   ]);
 
-  let best = pickBestVideo([...marcus, ...fia, ...general], title);
+  const candidates = dedupeVideos([...teamResults, general]);
+  return { song, base, candidates };
+}
 
-  // 관련 영상 없으면 일반 검색에서 재생수 최다
-  if (!best) {
-    const loose = [...general, ...marcus, ...fia]
-      .filter((v) => v?.id)
-      .sort((a, b) => viewsOf(b) - viewsOf(a))[0];
-    best = loose || null;
-  }
-
+function toResolved(song, best, base) {
+  const title = String(song.title || '').trim();
   if (!best?.id) {
     return {
-      id: String(song.id || title),
+      id: String(song.id || title || 'empty'),
       title: song.title,
-      query: base,
+      query: base || '',
       videoId: null,
-      error: '검색 결과 없음',
+      error: title ? '검색 결과 없음' : '제목 없음',
     };
   }
 
   return {
     id: String(song.id || best.id),
     title: song.title,
-    query: base,
+    query: base || '',
     videoId: best.id,
     videoTitle: best.title,
     channel: best.channel?.name,
+    channelTitle: best.channel?.name,
     views: viewsOf(best),
     preferredArtist: isPreferredArtist(best),
     url: `https://www.youtube.com/watch?v=${best.id}`,
@@ -183,8 +198,32 @@ async function mapPool(items, concurrency, worker) {
 
 async function resolveVideos(songs) {
   const list = songs.slice(0, 25);
-  // 동시 2곡 → 전체 시간 약 1/2
-  return mapPool(list, 2, (song) => resolveOneSong(song));
+
+  // 1) 곡별 유튜브 후보 수집
+  const pools = await mapPool(list, 2, (song) => searchCandidatesForSong(song));
+
+  // 2) Gemini가 워십팀 우선으로 일괄 선택
+  const geminiPicks = await pickVideosWithGemini(
+    pools.map(({ song, candidates }) => ({
+      songId: String(song.id || song.title),
+      title: song.title,
+      key: song.key,
+      candidates,
+    })),
+  );
+
+  // 3) Gemini 실패 곡은 로컬 워십팀→조회수 랭킹
+  return pools.map(({ song, base, candidates }) => {
+    const songKey = String(song.id || song.title);
+    const pickedId = geminiPicks.get(songKey);
+    let best = pickedId
+      ? candidates.find((v) => v?.id === pickedId)
+      : null;
+    if (!best) {
+      best = pickBestVideo(candidates, song.title);
+    }
+    return toResolved(song, best, base);
+  });
 }
 
 function buildWatchPlaylistUrl(videoIds, title) {
@@ -217,7 +256,7 @@ async function buildAutoPlaylist({ title, songs }) {
   }
 
   console.log(
-    `[autoPlaylist] ${videoIds.length}/${list.length}곡 · ${Date.now() - started}ms`,
+    `[autoPlaylist] ${videoIds.length}/${list.length}곡 · 워십팀 ${resolved.filter((r) => r.preferredArtist).length} · ${Date.now() - started}ms`,
   );
 
   return {
@@ -238,4 +277,5 @@ module.exports = {
   pickBestVideo,
   isPreferredArtist,
   isTitleRelevant,
+  WORSHIP_TEAMS,
 };

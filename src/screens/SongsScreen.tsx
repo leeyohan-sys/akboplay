@@ -105,7 +105,7 @@ export function SongsScreen({ navigation, route }: Props) {
           match: {
             videoId: hit.videoId,
             title: hit.videoTitle || s.title,
-            channelTitle: 'YouTube',
+            channelTitle: hit.channel || hit.channelTitle || 'YouTube',
             thumbnailUrl: `https://i.ytimg.com/vi/${hit.videoId}/mqdefault.jpg`,
           },
         };
