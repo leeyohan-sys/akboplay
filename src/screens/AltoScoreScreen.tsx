@@ -15,6 +15,7 @@ import { api } from '../services/api';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { showAlert } from '../utils/dialog';
+import { saveScoreTextFile } from '../utils/saveFile';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AltoScore'>;
@@ -37,7 +38,8 @@ function pickScoreFileWeb(): Promise<File | null> {
     }
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp';
+    input.accept =
+      'application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp';
     input.style.display = 'none';
     const cleanup = () => {
       input.onchange = null;
@@ -65,19 +67,17 @@ function pickScoreFileWeb(): Promise<File | null> {
   });
 }
 
-function downloadTextFile(fileName: string, content: string) {
-  if (typeof document === 'undefined') return;
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName.endsWith('.ly') ? fileName : `${fileName}.ly`;
-  a.click();
-  URL.revokeObjectURL(url);
+function buildLyFileName(result: AltoResult): string {
+  return (
+    (result.title || result.fileName || 'alto-score')
+      .replace(/\.(pdf|png|jpe?g|webp)$/i, '')
+      .replace(/[^\w가-힣\-]+/g, '_') + '.ly'
+  );
 }
 
 export function AltoScoreScreen({}: Props) {
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AltoResult | null>(null);
 
@@ -94,6 +94,51 @@ export function AltoScoreScreen({}: Props) {
     }
     showAlert('복사 실패', '브라우저에서 클립보드 권한을 확인해 주세요.');
   }, [result]);
+
+  /** 모바일/웹에서 악보 파일 저장·공유 */
+  const downloadLy = useCallback(
+    async (target?: AltoResult) => {
+      const data = target ?? result;
+      if (!data?.lilypond) return;
+      setSaving(true);
+      try {
+        const name = buildLyFileName(data);
+        const status = await saveScoreTextFile(name, data.lilypond, {
+          ext: 'ly',
+          mime: 'text/x-lilypond;charset=utf-8',
+        });
+        if (status === 'shared') {
+          showAlert(
+            '공유 완료',
+            '공유 시트에서 "파일에 저장" 또는 원하는 앱을 선택하세요.',
+          );
+        } else if (status === 'downloaded') {
+          showAlert('다운로드', `${name} 저장을 시작했습니다.`);
+        } else if (status === 'opened') {
+          showAlert(
+            '새 탭에서 열림',
+            '브라우저 메뉴(공유)에서 파일을 저장할 수 있습니다.',
+          );
+        } else {
+          // 최후: txt 저장 재시도
+          const txtStatus = await saveScoreTextFile(
+            name.replace(/\.ly$/i, '.txt'),
+            data.lilypond,
+            { ext: 'txt', mime: 'text/plain;charset=utf-8' },
+          );
+          if (txtStatus === 'failed') {
+            showAlert(
+              '저장 실패',
+              '이 브라우저에서는 파일 저장이 제한됩니다. "코드 복사" 후 메모장에 붙여넣기 해 주세요.',
+            );
+          }
+        }
+      } finally {
+        setSaving(false);
+      }
+    },
+    [result],
+  );
 
   const upload = async () => {
     setError(null);
@@ -126,17 +171,19 @@ export function AltoScoreScreen({}: Props) {
         );
       }
       setResult(analyzed);
+      // 생성 직후 모바일에서 바로 저장/공유 유도
+      if (Platform.OS === 'web' && analyzed.lilypond) {
+        // UI에 결과가 먼저 보이도록 한 프레임 뒤 호출
+        setTimeout(() => {
+          void downloadLy(analyzed);
+        }, 300);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '알토 악보 생성에 실패했습니다.');
     } finally {
       setLoading(false);
     }
   };
-
-  const lyName =
-    (result?.title || result?.fileName || 'alto-score')
-      .replace(/\.(pdf|png|jpe?g|webp)$/i, '')
-      .replace(/[^\w가-힣\-]+/g, '_') + '.ly';
 
   return (
     <ScreenShell
@@ -150,15 +197,16 @@ export function AltoScoreScreen({}: Props) {
           {result?.lilypond ? (
             <>
               <PrimaryButton
-                label=".ly 파일 다운로드"
-                onPress={() => downloadTextFile(lyName, result.lilypond)}
+                label="악보 파일 다운로드"
+                onPress={() => downloadLy()}
                 variant="ghost"
-                disabled={Platform.OS !== 'web'}
+                loading={saving}
               />
               <PrimaryButton
                 label="코드 복사"
                 onPress={copyLy}
                 variant="ghost"
+                disabled={saving}
               />
             </>
           ) : null}
@@ -174,10 +222,8 @@ export function AltoScoreScreen({}: Props) {
         <Text style={typography.h1}>알토 악보 만들기</Text>
         <Text style={[typography.body, styles.hint]}>
           멜로디 악보(PDF/JPG/PNG)를 올리면{'\n'}
-          알토 화성이 포함된 2성부 LilyPond(.ly) 코드를 만듭니다.{'\n'}
-          PC에서{' '}
-          <Text style={styles.mono}>python scripts/render_lilypond.py 파일.ly</Text>
-          로 PNG·PDF를 렌더하세요.
+          알토 화성이 포함된 2성부 LilyPond(.ly) 파일을 만들고{'\n'}
+          모바일에서는 공유 시트로 저장할 수 있습니다.
         </Text>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -189,9 +235,10 @@ export function AltoScoreScreen({}: Props) {
               {result.key ? ` · ${result.key}` : ''}
               {result.pageCount ? ` · ${result.pageCount}p` : ''}
             </Text>
-            {result.note ? (
-              <Text style={styles.note}>{result.note}</Text>
-            ) : null}
+            <Text style={styles.note}>
+              아래에서 코드를 확인하거나, 하단 "악보 파일 다운로드"로 폰에
+              저장하세요.
+            </Text>
             <Pressable onLongPress={copyLy}>
               <Text style={styles.code}>{result.lilypond}</Text>
             </Pressable>
@@ -228,11 +275,6 @@ const styles = StyleSheet.create({
   hint: {
     marginTop: 12,
     marginBottom: 18,
-  },
-  mono: {
-    fontFamily: 'Consolas, Menlo, monospace',
-    color: colors.brassBright,
-    fontSize: 13,
   },
   error: {
     ...typography.caption,
