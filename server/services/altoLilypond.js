@@ -207,6 +207,11 @@ function sanitizeLilypond(code) {
         return `% ${trimmed}`;
       }
 
+      // header/가사 명령 줄은 한글 유지
+      const keepHangul =
+        /\\(?:header|markup|lyricmode|addlyrics|lyrics)\b/i.test(trimmed) ||
+        /^\s*(?:title|composer|poet|arranger|subtitle)\s*=/.test(trimmed);
+
       // 인라인 볼드 제거
       let out = line.replace(/\*\*/g, '');
       // "m.9 (1st Ending: E B): <음표…>" → 음표만 남김
@@ -223,6 +228,29 @@ function sanitizeLilypond(code) {
         /^([ \t]*)m\.\d+\b[^:\\{]*:\s*(?=[a-grA-GR\\<{])/i,
         '$1',
       );
+
+      if (!keepHangul) {
+        // "으로 - - 보" -> cis''2 …  /  품* -> d''8 …  (가사·분석 매핑 제거)
+        out = out.replace(/^([ \t]*)"[^"]*"\s*\*?\s*(?:->|→)\s*/u, '$1');
+        out = out.replace(
+          /^([ \t]*)[\uAC00-\uD7A3][\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\s\-_*]*\*?\s*(?:->|→)\s*/u,
+          '$1',
+        );
+        // 음표 줄 안의 한글 따옴표 조각·고아 한글 토큰 제거 (not a note name: 품)
+        if (/\b[a-g](?:is|es)?[,']*\d/i.test(out)) {
+          out = out.replace(/"[^"\n]*[\uAC00-\uD7A3][^"\n]*"/gu, '');
+          out = out.replace(
+            /[\uAC00-\uD7A3][\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\s\-_*]*/gu,
+            ' ',
+          );
+          out = out.replace(/\s{2,}/g, ' ');
+          // " -> notes" 잔여 화살표 정리
+          out = out.replace(/^([ \t]*)(?:->|→)\s*/u, '$1');
+        } else if (/[\uAC00-\uD7A3]/.test(out) && !/\\/.test(out)) {
+          // 음표 없는 한글 설명 줄 → 주석
+          return `% ${trimmed}`;
+        }
+      }
 
       // 줄 맨 앞 고아 백틱 (`c4 → c4)
       out = out.replace(/^([ \t]*)`+([a-gA-G])/g, '$1$2');
@@ -481,6 +509,7 @@ ${extra}
 10) 1·2번 엔딩/도돌이표는 자연어 금지. 오직 \\repeat volta N { ... } \\alternative { { ... } { ... } } 만 사용.
 11) "m.9", "1st Ending", "2nd Ending" 같은 마디·엔딩 라벨을 코드 줄에 절대 쓰지 말 것.
 12) 마크다운 금지: *, -, **, "#", "Alto:", "Melody:" 목록/설명 금지. 음표는 반드시 \\relative { } 또는 \\new Staff { } 안에만.
+13) 가사·음표 매핑 금지. "품* -> d8", "\\"으로\\" -> cis2" 같은 형식을 쓰지 말 것. 가사는 \\lyricmode / \\addlyrics 만 사용.
 
 LilyPond 소스만:`;
 }

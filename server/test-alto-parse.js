@@ -146,4 +146,27 @@ if (scoreAt >= 0) {
 }
 assert(looksLikeLilypond(fixedNested), 'fixed nested score still valid');
 
+// 가사→음표 매핑 (품* -> / "으로" ->) 제거
+const lyricMap = `\\version "2.24.0"
+\\header { title = "보혈을_지나_1_E_" tagline = ##f }
+\\score {
+  \\new Staff {
+    \\clef treble
+    \\relative c' {
+    품* -> d''8 d''8 d''8. cis''16
+    "으로 - - 보" -> cis''2 ~ cis''4 r8 b'8
+    d''8 d''8 d''8. cis''16 ~ cis''4
+    }
+  }
+  \\layout { }
+}`;
+const fixedLyric = repairLilypond(lyricMap, '보혈을_지나_1_E_.pdf');
+assert(!/품/.test(fixedLyric), 'hangul syllable stripped from music');
+assert(!/으로/.test(fixedLyric), 'quoted lyric mapping stripped');
+assert(!/->/.test(fixedLyric), 'arrow mapping removed');
+assert(/d''8\s+d''8\s+d''8\.\s+cis''16/.test(fixedLyric), 'notes after 품* kept');
+assert(/cis''2\s*~\s*cis''4/.test(fixedLyric), 'notes after quoted lyric kept');
+assert(looksLikeLilypond(fixedLyric), 'lyric-map repaired still valid');
+assert(/title = "보혈을_지나_1_E_"/.test(fixedLyric), 'header hangul preserved');
+
 console.log('ok: alto parse/repair smoke tests passed');
