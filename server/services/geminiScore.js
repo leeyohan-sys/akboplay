@@ -2,23 +2,42 @@
  * Gemini API로 악보 PDF(스캔 이미지)에서 곡 제목을 추출합니다.
  * 키: GEMINI_API_KEY 환경변수 (코드에 하드코딩하지 않음)
  */
-const { randomUUID } = require('crypto');
+const { createHash, randomUUID } = require('crypto');
 const { PDFParse } = require('pdf-parse');
 const { isPageMarker } = require('./hymnParser');
 const { normalizeMusicKey } = require('./musicKey');
+const { isConfigured, generateContent } = require('./geminiClient');
 
-function isConfigured() {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+/** 동일 PDF 재요청 시 API 호출 생략 */
+const pdfResultCache = new Map();
+const PDF_CACHE_MAX = 20;
 
 /** Gemini가 준 제목은 junk 필터 없이 수용 (페이지 마커·빈 제목만 제외) */
 function acceptGeminiTitle(title) {
   const t = String(title || '').trim();
   return Boolean(t) && !isPageMarker(t);
+}
+
+function bufferHash(buffer) {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+function cacheGet(key) {
+  const hit = pdfResultCache.get(key);
+  if (!hit) return null;
+  // LRU 비슷하게 재삽입
+  pdfResultCache.delete(key);
+  pdfResultCache.set(key, hit);
+  return hit;
+}
+
+function cacheSet(key, value) {
+  if (pdfResultCache.has(key)) pdfResultCache.delete(key);
+  pdfResultCache.set(key, value);
+  while (pdfResultCache.size > PDF_CACHE_MAX) {
+    const oldest = pdfResultCache.keys().next().value;
+    pdfResultCache.delete(oldest);
+  }
 }
 
 function parseJsonSongs(raw) {
@@ -120,17 +139,15 @@ async function pdfPagesToJpegs(buffer, { scale = 1.25 } = {}) {
 async function extractSongsWithGemini(buffer, fileName) {
   if (!isConfigured()) return null;
 
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const apiKey = process.env.GEMINI_API_KEY.trim();
-  const genAI = new GoogleGenerativeAI(apiKey);
-
-  // 사용 가능한 모델 우선순위 (쿼터/지역에 따라 다를 수 있음)
-  const modelNames = [
-    'gemini-flash-latest',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-2.5-flash',
-  ];
+  const hash = bufferHash(buffer);
+  const cached = cacheGet(hash);
+  if (cached?.songs?.length) {
+    console.log(`[gemini] 캐시 히트 · ${cached.songs.length}곡`);
+    return {
+      songs: cached.songs.map((s) => ({ ...s, id: randomUUID() })),
+      rawText: cached.rawText,
+    };
+  }
 
   // 페이지 수 제한 없이 전체 페이지를 Gemini에 전달
   const images = await pdfPagesToJpegs(buffer, { scale: 1.25 });
@@ -165,64 +182,39 @@ async function extractSongsWithGemini(buffer, fileName) {
   // 페이지가 많을수록 여유 시간 부여 (최대 2분)
   const timeoutMs = Math.min(120000, 35000 + images.length * 12000);
 
-  let lastError = null;
-  for (const modelName of modelNames) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 4096,
-          },
-        });
+  console.log(`[gemini] 인식 준비 · pages=${images.length}`);
+  const response = await generateContent({
+    contents: parts,
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 4096,
+    },
+    timeoutMs,
+    label: 'gemini',
+  });
 
-        console.log(
-          `[gemini] 요청 · model=${modelName} · pages=${images.length} · try=${attempt + 1}`,
-        );
-        const result = await Promise.race([
-          model.generateContent({ contents: [{ role: 'user', parts }] }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('gemini-timeout')), timeoutMs),
-          ),
-        ]);
+  if (!response?.text) return null;
 
-        const rawText = result?.response?.text?.() || '';
-        const parsed = parseJsonSongs(rawText);
-        if (parsed.length === 0) {
-          console.warn('[gemini] 파싱 실패:', rawText.slice(0, 240));
-          break; // 다음 모델
-        }
-
-        const songs = parsed.map((s) => ({
-          id: randomUUID(),
-          title: s.title,
-          composer: s.composer || undefined,
-          number: s.number || undefined,
-          key: s.key || undefined,
-          confidence: 0.94,
-          selected: true,
-        }));
-
-        console.log(`[gemini] ${songs.length}곡 인식 · ${modelName}`);
-        return { songs, rawText };
-      } catch (err) {
-        lastError = err;
-        const msg = String(err.message || err);
-        console.warn(`[gemini] ${modelName} 실패:`, msg.slice(0, 180));
-        if (/429|quota|rate/i.test(msg) && attempt === 0) {
-          await sleep(3000);
-          continue;
-        }
-        break;
-      }
-    }
+  const rawText = response.text;
+  const parsed = parseJsonSongs(rawText);
+  if (parsed.length === 0) {
+    console.warn('[gemini] 파싱 실패:', rawText.slice(0, 240));
+    return null;
   }
 
-  if (lastError) {
-    console.warn('[gemini] 최종 실패:', String(lastError.message || lastError).slice(0, 200));
-  }
-  return null;
+  const songs = parsed.map((s) => ({
+    id: randomUUID(),
+    title: s.title,
+    composer: s.composer || undefined,
+    number: s.number || undefined,
+    key: s.key || undefined,
+    confidence: 0.94,
+    selected: true,
+  }));
+
+  console.log(`[gemini] ${songs.length}곡 인식 · ${response.model}`);
+  cacheSet(hash, { songs, rawText });
+  return { songs, rawText };
 }
 
 module.exports = {

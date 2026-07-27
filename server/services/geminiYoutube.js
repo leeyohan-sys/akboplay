@@ -2,14 +2,7 @@
  * Gemini로 유튜브 후보 중 최적 영상을 고릅니다.
  * 우선: 한국 대표 워십팀 → 없으면 조회수·인지도 높은 버전
  */
-
-function isConfigured() {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const { isConfigured, generateContent } = require('./geminiClient');
 
 /** 후보를 Gemini용 짧은 목록으로 정리 */
 function slimCandidates(candidates, limit = 12) {
@@ -79,15 +72,6 @@ async function pickVideosWithGemini(jobs) {
     payload.flatMap((j) => j.candidates.map((c) => c.id)),
   );
 
-  const { GoogleGenerativeAI } = require('@google/generative-ai');
-  const apiKey = process.env.GEMINI_API_KEY.trim();
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const modelNames = [
-    'gemini-flash-latest',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
-  ];
-
   const prompt = `당신은 한국 교회 찬양 유튜브 큐레이터입니다.
 각 곡마다 후보 영상 중 **하나만** 고르세요.
 
@@ -105,63 +89,31 @@ ${JSON.stringify(payload)}
 출력: 설명 없이 JSON 배열만.
 예: [{"songId":"...","videoId":"...","reason":"피아워십 라이브"}]`;
 
-  let lastError = null;
-  for (const modelName of modelNames) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 4096,
-          },
-        });
+  const response = await generateContent({
+    contents: prompt,
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 4096,
+    },
+    timeoutMs: 45000,
+    label: 'gemini-yt',
+  });
 
-        console.log(
-          `[gemini-yt] 추천 요청 · model=${modelName} · songs=${payload.length} · try=${attempt + 1}`,
-        );
+  if (!response?.text) return result;
 
-        const response = await Promise.race([
-          model.generateContent(prompt),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('gemini-yt-timeout')), 45000),
-          ),
-        ]);
-
-        const rawText = response?.response?.text?.() || '';
-        const picks = parsePicksJson(rawText, allowedIds);
-        for (const p of picks) {
-          result.set(p.songId, p.videoId);
-        }
-
-        if (result.size > 0) {
-          console.log(
-            `[gemini-yt] ${result.size}/${payload.length}곡 선택 · ${modelName}`,
-          );
-          return result;
-        }
-
-        console.warn('[gemini-yt] 파싱 실패:', rawText.slice(0, 200));
-        break;
-      } catch (err) {
-        lastError = err;
-        const msg = String(err.message || err);
-        console.warn(`[gemini-yt] ${modelName} 실패:`, msg.slice(0, 160));
-        if (/429|quota|rate/i.test(msg) && attempt === 0) {
-          await sleep(2500);
-          continue;
-        }
-        break;
-      }
-    }
+  const picks = parsePicksJson(response.text, allowedIds);
+  for (const p of picks) {
+    result.set(p.songId, p.videoId);
   }
 
-  if (lastError) {
-    console.warn(
-      '[gemini-yt] 최종 실패:',
-      String(lastError.message || lastError).slice(0, 180),
+  if (result.size > 0) {
+    console.log(
+      `[gemini-yt] ${result.size}/${payload.length}곡 선택 · ${response.model}`,
     );
+  } else {
+    console.warn('[gemini-yt] 파싱 실패:', response.text.slice(0, 200));
   }
+
   return result;
 }
 

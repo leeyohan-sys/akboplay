@@ -48,7 +48,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'gemini-yt-worship-20260727',
+    version: 'gemini-rate-limit-20260727',
   });
 });
 
