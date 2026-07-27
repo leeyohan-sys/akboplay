@@ -14,6 +14,7 @@ const {
 } = require('./services/youtube');
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
 const { decodeUploadFileName } = require('./utils/fileName');
+const { generateAltoLilypond } = require('./services/altoLilypond');
 
 const app = express();
 const upload = multer({
@@ -48,12 +49,57 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'yt-no-gemini-20260727',
+    version: 'alto-lilypond-20260727',
   });
 });
 
 app.get('/api/demo', (_req, res) => {
   res.json(getDemoResult('demo-score.pdf'));
+});
+
+/** 악보 PDF/이미지 → 알토 2성부 LilyPond(.ly) */
+app.post('/api/alto-score', upload.single('score'), async (req, res) => {
+  res.setTimeout(120000);
+  try {
+    const fileName = decodeUploadFileName(
+      req.body?.fileName || req.file?.originalname || 'score.pdf',
+    );
+    if (!req.file) {
+      return res.status(400).json({
+        error: '악보 파일(PDF/JPG/PNG)을 첨부해 주세요.',
+      });
+    }
+
+    console.log(
+      `[alto-score] ${fileName} (${req.file.size} bytes, ${req.file.mimetype})`,
+    );
+
+    const result = await Promise.race([
+      generateAltoLilypond(req.file.buffer, fileName, req.file.mimetype),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('알토 악보 생성 시간이 초과되었습니다.')),
+          110000,
+        ),
+      ),
+    ]);
+
+    return res.json({
+      fileName,
+      title: result.title || fileName.replace(/\.(pdf|png|jpe?g|webp)$/i, ''),
+      key: result.key,
+      pageCount: result.pageCount,
+      lilypond: result.lilypond,
+      model: result.model,
+      note: '아래 LilyPond 코드를 render_lilypond.py로 PNG/PDF로 렌더할 수 있습니다.',
+    });
+  } catch (err) {
+    console.error('[alto-score]', err);
+    return res.status(500).json({
+      error: err.message || '알토 악보 생성에 실패했습니다.',
+      code: err.code,
+    });
+  }
 });
 
 /** PDF 악보 업로드 → 곡 후보 추출 */

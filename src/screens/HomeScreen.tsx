@@ -205,6 +205,12 @@ export function HomeScreen({ navigation }: Props) {
             variant="ghost"
             disabled={loading}
           />
+          <PrimaryButton
+            label="알토 악보 만들기"
+            onPress={() => navigation.navigate('AltoScore')}
+            variant="ghost"
+            disabled={loading}
+          />
         </View>
       }
     >

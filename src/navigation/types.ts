@@ -4,6 +4,7 @@ export type RootStackParamList = {
   Home: undefined;
   Songs: { analyze: AnalyzeResult };
   BeatDetect: undefined;
+  AltoScore: undefined;
   Playlist: {
     fileName: string;
     songs: MatchedSong[];

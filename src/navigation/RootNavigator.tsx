@@ -5,6 +5,7 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { SongsScreen } from '../screens/SongsScreen';
 import { PlaylistScreen } from '../screens/PlaylistScreen';
 import { BeatDetectScreen } from '../screens/BeatDetectScreen';
+import { AltoScoreScreen } from '../screens/AltoScoreScreen';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from './types';
 
@@ -54,6 +55,11 @@ export function RootNavigator() {
           name="BeatDetect"
           component={BeatDetectScreen}
           options={{ title: 'BPM 탐지' }}
+        />
+        <Stack.Screen
+          name="AltoScore"
+          component={AltoScoreScreen}
+          options={{ title: '알토 악보' }}
         />
         <Stack.Screen
           name="Playlist"

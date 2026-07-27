@@ -219,6 +219,75 @@ export const api = {
     });
   },
 
+  /** 알토 2성부 LilyPond 생성 (네이티브 URI) */
+  generateAltoScore: async (
+    uri: string,
+    fileName: string,
+    file?: File | Blob | null,
+    mimeType?: string,
+  ) => {
+    const form = new FormData();
+    const name = fileName || 'score.pdf';
+    form.append('fileName', name);
+
+    if (Platform.OS === 'web') {
+      let blob: Blob;
+      if (file) blob = file;
+      else blob = await blobFromUri(uri);
+      if (!blob || blob.size < 20) {
+        throw new Error('악보 파일이 비어 있습니다.');
+      }
+      const upload =
+        typeof File !== 'undefined'
+          ? new File([blob], name, {
+              type: mimeType || blob.type || 'application/octet-stream',
+            })
+          : blob;
+      form.append('score', upload, name);
+    } else {
+      form.append('score', {
+        uri,
+        name,
+        type: mimeType || 'application/octet-stream',
+      } as unknown as Blob);
+    }
+
+    return request<{
+      fileName: string;
+      title?: string;
+      key?: string;
+      pageCount?: number;
+      lilypond: string;
+      note?: string;
+      model?: string;
+    }>('/api/alto-score', {
+      method: 'POST',
+      body: form,
+      timeoutMs: 130000,
+    });
+  },
+
+  /** 웹 File → 알토 LilyPond */
+  generateAltoScoreFile: async (file: File) => {
+    const form = new FormData();
+    const name = file.name || 'score.pdf';
+    form.append('fileName', name);
+    form.append('score', file, name);
+    return request<{
+      fileName: string;
+      title?: string;
+      key?: string;
+      pageCount?: number;
+      lilypond: string;
+      note?: string;
+      model?: string;
+    }>('/api/alto-score', {
+      method: 'POST',
+      body: form,
+      timeoutMs: 130000,
+    });
+  },
+
   matchYoutube: (songs: { id: string; title: string; composer?: string }[]) =>
     request<{ songs: MatchedSong[] }>('/api/match', {
       method: 'POST',
