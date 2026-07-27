@@ -30,31 +30,46 @@ function findBin() {
   return null;
 }
 
-function download(url, dest) {
+function download(url, dest, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (redirectCount > 5) {
+      reject(new Error('too many redirects'));
+      return;
+    }
     const file = fs.createWriteStream(dest);
     const get = url.startsWith('https') ? https.get : http.get;
-    const req = get(url, { headers: { 'User-Agent': 'akboplay-install' } }, (res) => {
-      // GitLab 리다이렉트 추적
-      if (
-        res.statusCode >= 300 &&
-        res.statusCode < 400 &&
-        res.headers.location
-      ) {
-        file.close();
-        fs.unlinkSync(dest);
-        download(res.headers.location, dest).then(resolve, reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        file.close();
-        fs.unlinkSync(dest);
-        reject(new Error(`download failed: HTTP ${res.statusCode}`));
-        return;
-      }
-      res.pipe(file);
-      file.on('finish', () => file.close(() => resolve()));
-    });
+    // agent: false → keep-alive 소켓이 남아 프로세스가 종료되지 않는 문제 방지
+    const req = get(
+      url,
+      { headers: { 'User-Agent': 'akboplay-install' }, agent: false },
+      (res) => {
+        // GitLab 리다이렉트 추적 (응답 본문을 반드시 소비/폐기해 소켓을 해제한다)
+        if (
+          res.statusCode >= 300 &&
+          res.statusCode < 400 &&
+          res.headers.location
+        ) {
+          res.resume();
+          file.close();
+          fs.unlink(dest, () => {});
+          download(res.headers.location, dest, redirectCount + 1).then(
+            resolve,
+            reject,
+          );
+          return;
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          file.close();
+          fs.unlink(dest, () => {});
+          reject(new Error(`download failed: HTTP ${res.statusCode}`));
+          return;
+        }
+        res.pipe(file);
+        file.on('finish', () => file.close(() => resolve()));
+      },
+    );
+    req.setTimeout(60000, () => req.destroy(new Error('download timeout')));
     req.on('error', (err) => {
       try {
         file.close();
@@ -121,8 +136,13 @@ async function main() {
   log('installed:', bin);
 }
 
-main().catch((err) => {
-  console.error('[install-lilypond] FAILED:', err.message || err);
-  // 빌드는 계속 진행 (헬스체크/런타임에서 안내)
-  process.exit(0);
-});
+main()
+  .then(() => {
+    // 열린 소켓/핸들이 남아 있어도 빌드가 멈추지 않도록 명시적으로 종료
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('[install-lilypond] FAILED:', err.message || err);
+    // 빌드는 계속 진행 (헬스체크/런타임에서 안내)
+    process.exit(0);
+  });
