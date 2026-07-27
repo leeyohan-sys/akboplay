@@ -245,6 +245,8 @@ export const api = {
         title: string;
         videoId: string | null;
         videoTitle?: string;
+        channel?: string;
+        channelTitle?: string;
         query: string;
         error?: string;
       }[];

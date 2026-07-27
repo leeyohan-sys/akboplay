@@ -199,6 +199,12 @@ export function HomeScreen({ navigation }: Props) {
             variant="ghost"
             disabled={loading}
           />
+          <PrimaryButton
+            label="BPM 탐지"
+            onPress={() => navigation.navigate('BeatDetect')}
+            variant="ghost"
+            disabled={loading}
+          />
         </View>
       }
     >

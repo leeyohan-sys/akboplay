@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { HomeScreen } from '../screens/HomeScreen';
 import { SongsScreen } from '../screens/SongsScreen';
 import { PlaylistScreen } from '../screens/PlaylistScreen';
+import { BeatDetectScreen } from '../screens/BeatDetectScreen';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from './types';
 
@@ -29,10 +30,14 @@ export function RootNavigator() {
           headerStyle: { backgroundColor: colors.ink },
           headerTintColor: colors.brassBright,
           headerTitleStyle: {
-            fontFamily: 'NotoSansKR_500Medium',
+            fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
             fontSize: 16,
           },
-          contentStyle: { backgroundColor: colors.ink },
+          contentStyle: {
+            backgroundColor: colors.ink,
+            flex: 1,
+          },
+          headerShadowVisible: false,
         }}
       >
         <Stack.Screen
@@ -44,6 +49,11 @@ export function RootNavigator() {
           name="Songs"
           component={SongsScreen}
           options={{ title: '곡 확인' }}
+        />
+        <Stack.Screen
+          name="BeatDetect"
+          component={BeatDetectScreen}
+          options={{ title: 'BPM 탐지' }}
         />
         <Stack.Screen
           name="Playlist"

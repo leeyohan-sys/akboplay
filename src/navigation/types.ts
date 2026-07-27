@@ -3,6 +3,7 @@ import type { AnalyzeResult, MatchedSong } from '../types';
 export type RootStackParamList = {
   Home: undefined;
   Songs: { analyze: AnalyzeResult };
+  BeatDetect: undefined;
   Playlist: {
     fileName: string;
     songs: MatchedSong[];

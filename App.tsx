@@ -1,17 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback } from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import {
-  useFonts,
-  NotoSansKR_400Regular,
-  NotoSansKR_500Medium,
-  NotoSansKR_700Bold,
-} from '@expo-google-fonts/noto-sans-kr';
-import {
-  NotoSerifKR_600SemiBold,
-  NotoSerifKR_700Bold,
-} from '@expo-google-fonts/noto-serif-kr';
 import * as SplashScreen from 'expo-splash-screen';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { colors } from './src/theme/colors';
@@ -22,38 +12,18 @@ if (Platform.OS === 'web') {
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
+/**
+ * 웹(GitHub Pages)에서는 대용량 TTF 번들 대신 CDN 폰트를 씁니다.
+ * 폰트 로드 실패로 스플래시에 멈추지 않도록 바로 앱을 렌더합니다.
+ */
 export default function App() {
-  const [fontsLoaded] = useFonts({
-    NotoSansKR_400Regular,
-    NotoSansKR_500Medium,
-    NotoSansKR_700Bold,
-    NotoSerifKR_600SemiBold,
-    NotoSerifKR_700Bold,
-  });
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    if (fontsLoaded) setReady(true);
-  }, [fontsLoaded]);
-
   const onLayout = useCallback(async () => {
-    if (ready) {
-      await SplashScreen.hideAsync();
-    }
-  }, [ready]);
-
-  if (!ready) {
-    return (
-      <View style={styles.boot}>
-        <StatusBar style="light" />
-        <ActivityIndicator color={colors.brass} size="large" />
-        <Text style={styles.bootText}>악보플레이</Text>
-      </View>
-    );
-  }
+    await SplashScreen.hideAsync().catch(() => undefined);
+  }, []);
 
   return (
     <SafeAreaProvider onLayout={onLayout} style={styles.provider}>
+      <StatusBar style="light" />
       <View style={styles.appRoot}>
         <RootNavigator />
       </View>
@@ -64,27 +34,17 @@ export default function App() {
 const styles = StyleSheet.create({
   provider: {
     flex: 1,
+    minHeight: 0,
+    backgroundColor: colors.ink,
     ...(Platform.OS === 'web'
-      ? ({ height: '100%', minHeight: '100vh' } as object)
+      ? ({ height: '100%', maxHeight: '100%', overflow: 'hidden' } as object)
       : null),
   },
   appRoot: {
     flex: 1,
+    minHeight: 0,
     ...(Platform.OS === 'web'
-      ? ({ height: '100%', minHeight: '100vh' } as object)
+      ? ({ height: '100%', maxHeight: '100%', overflow: 'hidden' } as object)
       : null),
-  },
-  boot: {
-    flex: 1,
-    backgroundColor: colors.ink,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    ...(Platform.OS === 'web' ? ({ height: '100vh' } as object) : null),
-  },
-  bootText: {
-    color: colors.cream,
-    fontSize: 18,
-    letterSpacing: 1,
   },
 });
