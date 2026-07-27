@@ -1,11 +1,10 @@
 /**
  * API 키 없이 유튜브 검색 → videoId 수집 → 재생목록 URL 생성
  * 우선순위: 한국 대표 워십팀 → 없으면 조회수·인지도 높은 버전
- * Gemini가 후보 중 최적 영상을 고르고, 실패 시 로컬 랭킹으로 폴백
+ * (Gemini 미사용 — youtube-sr 검색 + 로컬 랭킹만)
  */
 const YouTube = require('youtube-sr').default;
 const { formatKeyForSearch } = require('./musicKey');
-const { pickVideosWithGemini } = require('./geminiYoutube');
 
 /** 한국 대표 워십팀 (검색·선호 판별) */
 const WORSHIP_TEAMS = [
@@ -199,29 +198,11 @@ async function mapPool(items, concurrency, worker) {
 async function resolveVideos(songs) {
   const list = songs.slice(0, 25);
 
-  // 1) 곡별 유튜브 후보 수집
+  // 곡별 유튜브 검색 후 워십팀 → 조회수 로컬 랭킹 (Gemini 미사용)
   const pools = await mapPool(list, 2, (song) => searchCandidatesForSong(song));
 
-  // 2) Gemini가 워십팀 우선으로 일괄 선택
-  const geminiPicks = await pickVideosWithGemini(
-    pools.map(({ song, candidates }) => ({
-      songId: String(song.id || song.title),
-      title: song.title,
-      key: song.key,
-      candidates,
-    })),
-  );
-
-  // 3) Gemini 실패 곡은 로컬 워십팀→조회수 랭킹
   return pools.map(({ song, base, candidates }) => {
-    const songKey = String(song.id || song.title);
-    const pickedId = geminiPicks.get(songKey);
-    let best = pickedId
-      ? candidates.find((v) => v?.id === pickedId)
-      : null;
-    if (!best) {
-      best = pickBestVideo(candidates, song.title);
-    }
+    const best = pickBestVideo(candidates, song.title);
     return toResolved(song, best, base);
   });
 }
