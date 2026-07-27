@@ -8,6 +8,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { sanitizeLilypond } = require('./altoLilypond');
 
 const RENDER_TIMEOUT_MS = Number(process.env.LILYPOND_TIMEOUT_MS || 50000);
 
@@ -64,6 +65,18 @@ function run(cmd, args) {
   });
 }
 
+/** stderr에서 사용자에게 보여줄 핵심 오류만 추출 */
+function summarizeLilypondError(stderr) {
+  const lines = String(stderr || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const errLine = lines.find((l) => /:\d+:\d+:\s*error:/i.test(l));
+  const fatal = lines.find((l) => /fatal error/i.test(l));
+  const detail = [errLine, fatal].filter(Boolean).join(' · ').slice(0, 400);
+  return detail || lines.slice(-3).join(' · ').slice(0, 400);
+}
+
 /**
  * @param {string} lilypondSource
  * @returns {Promise<{ pdf: Buffer|null, png: Buffer|null }>}
@@ -78,12 +91,15 @@ async function renderLilypond(lilypondSource) {
     throw e;
   }
 
+  // Gemini가 넣은 자연어 마디 라벨 등 비문법 정리 후 렌더
+  const source = sanitizeLilypond(lilypondSource);
+
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'alto-ly-'));
   const id = crypto.randomBytes(4).toString('hex');
   const lyPath = path.join(dir, `${id}.ly`);
   const outBase = path.join(dir, id);
 
-  await fsp.writeFile(lyPath, lilypondSource, 'utf8');
+  await fsp.writeFile(lyPath, source, 'utf8');
 
   try {
     await run(bin, ['--pdf', '-o', outBase, lyPath]);
@@ -119,13 +135,13 @@ async function renderLilypond(lilypondSource) {
     return { pdf, png };
   } catch (err) {
     if (err.code === 'NO_LILYPOND') throw err;
-    const detail = String(err.stderr || err.message || err)
-      .split(/\r?\n/)
-      .filter((l) => /error|ENOENT|fatal/i.test(l) || l.trim())
-      .slice(-6)
-      .join(' ')
-      .slice(0, 500);
-    const e = new Error(`악보 렌더에 실패했습니다: ${detail || '알 수 없는 오류'}`);
+    const detail = summarizeLilypondError(err.stderr || err.message || err);
+    console.error('[renderLilypond] failed:', detail);
+    const e = new Error(
+      detail
+        ? `악보 렌더에 실패했습니다: ${detail}`
+        : '악보 렌더에 실패했습니다. 알토 악보를 다시 생성해 주세요.',
+    );
     e.code = 'RENDER_FAILED';
     throw e;
   } finally {

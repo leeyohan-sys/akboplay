@@ -3,6 +3,7 @@ const {
   extractLilypond,
   looksLikeLilypond,
   repairLilypond,
+  sanitizeLilypond,
 } = require('./services/altoLilypond');
 
 function assert(cond, msg) {
@@ -50,5 +51,23 @@ const smartQuotes = `아래는 코드입니다.
 \\score { << \\new Staff { \\relative c' { e1 } } \\new Staff { \\relative c' { cis1 } } >> \\layout{} }`;
 ly = repairLilypond(extractLilypond(smartQuotes), '보행을_지나_1(E).png');
 assert(looksLikeLilypond(ly), 'smart quotes + Korean title should parse');
+
+// Gemini가 넣는 마디/엔딩 자연어 라벨 제거
+const endingProse = `\\version "2.24.0"
+\\header { title = "x" }
+melody = \\relative c' {
+  e4 b4
+m.9 (1st Ending: E B): e4 b4 |
+m.10 (2nd Ending: E B): e2. |
+}
+alto \\relative c' { cis4 gis4 e4 b4 }
+\\score { << \\new Staff { \\melody } \\new Staff { \\alto } >> \\layout{} }`;
+const cleaned = sanitizeLilypond(endingProse);
+assert(!/m\.9/i.test(cleaned), 'measure prose prefix fully removed');
+assert(!/1st Ending/i.test(cleaned), '1st Ending label removed');
+assert(/e4 b4\s*\|/.test(cleaned), 'notes after ending label kept');
+assert(/alto\s*=\s*\\relative/.test(cleaned), 'missing = before relative fixed');
+assert(looksLikeLilypond(cleaned), 'sanitized ending prose still valid');
+console.log('sanitized preview:\n', cleaned);
 
 console.log('ok: alto parse/repair smoke tests passed');

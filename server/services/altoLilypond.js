@@ -135,9 +135,96 @@ function looksLikeLilypond(code) {
   return hits >= 2 || (/\\version\b/.test(c) && hasMusic);
 }
 
+/**
+ * Gemini가 자주 넣는 비문법 조각을 정리
+ * 예: "m.9 (1st Ending: E B): e4 b4" → "e4 b4"
+ * 예: "alto \\relative c' {" → "alto = \\relative c' {"
+ */
+function sanitizeLilypond(code) {
+  let c = String(code || '');
+  if (!c.trim()) return c;
+
+  c = c
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'");
+
+  c = c
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('%')) return line;
+
+      // 마디/엔딩 자연어 라벨만 있는 줄 → 주석
+      if (
+        /^m\.\d+\b/i.test(trimmed) &&
+        !/\\/.test(trimmed) &&
+        !/\b[a-g](?:is|es)?['`,]*\d/.test(trimmed)
+      ) {
+        return `% ${trimmed}`;
+      }
+      if (
+        /^(?:\d+(?:st|nd|rd|th)\s+)?(?:1st|2nd)\s+Ending\b/i.test(trimmed) &&
+        !/\\/.test(trimmed)
+      ) {
+        return `% ${trimmed}`;
+      }
+
+      // "m.9 (1st Ending: E B): <음표…>" → 음표만 남김
+      // 괄호 안 콜론이 있어도 라벨 전체(마지막 바깥 콜론까지)를 제거
+      let out = line.replace(
+        /^([ \t]*)m\.\d+\b(?:\s*\([^)]*\))?\s*:\s*/i,
+        '$1',
+      );
+      out = out.replace(
+        /^([ \t]*)(?:\d+(?:st|nd|rd|th)\s+)?(?:1st|2nd)\s+Ending\b(?:\s*\([^)]*\))?\s*:\s*/i,
+        '$1',
+      );
+      // 괄호 없는 "m.9: notes" / "m.9 something: notes"
+      out = out.replace(
+        /^([ \t]*)m\.\d+\b[^:\\{]*:\s*(?=[a-grA-GR\\<{])/i,
+        '$1',
+      );
+
+      // "melody \\relative" / "alto \\lyricmode" 처럼 = 누락 보정
+      out = out.replace(
+        /^([ \t]*)([A-Za-z][A-Za-z0-9_]*)(\s+)(\\(?:relative|lyricmode|new|lyrics)\b)/,
+        (full, indent, name, sp, cmd) => {
+          const reserved = new Set([
+            'new',
+            'with',
+            'override',
+            'set',
+            'once',
+            'undo',
+            'temporary',
+            'version',
+            'header',
+            'score',
+            'layout',
+            'midi',
+            'paper',
+            'book',
+            'bookpart',
+            'markup',
+            'repeat',
+            'alternative',
+            'context',
+          ]);
+          if (reserved.has(name)) return full;
+          return `${indent}${name} = ${cmd}`;
+        },
+      );
+
+      return out;
+    })
+    .join('\n');
+
+  return c;
+}
+
 /** 최소한의 헤더를 붙여 유효 .ly 로 복구 */
 function repairLilypond(code, fileName) {
-  let c = String(code || '').trim();
+  let c = sanitizeLilypond(String(code || '').trim());
   if (!c) return c;
 
   // LilyPond 토큰이 전혀 없으면 복구하지 않음 (사과/설명 문구 방지)
@@ -148,11 +235,6 @@ function repairLilypond(code, fileName) {
   ) {
     return c;
   }
-
-  // 스마트쿼트 등 정리
-  c = c
-    .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2018\u2019]/g, "'");
 
   if (!/\\version\b/.test(c)) {
     c = `\\version "2.24.0"\n\n${c}`;
@@ -189,9 +271,12 @@ ${extra}
 3) 위 성부: 원곡 멜로디. 아래 성부: 알토 화성(3도·6도·화음톤, 자연스러운 성부진행).
 4) \\new ChoirStaff << \\new Staff = "melody" ... \\new Staff = "alto" ... >> 형식 권장.
 5) 가사가 보이면 Lyrics 포함, 없으면 생략.
-6) \\header { title = "..." composer = "..." } 채우기.
+6) \\header { title = "..." composer = "..." } 채우기. 모든 필드는 key = "value" 형식(등호 필수).
 7) \\score { ... \\layout { } \\midi { } } 포함.
 8) 음표가 애매해도 빈 출력 금지. 최소한의 2성부 스케치를 작성.
+9) 변수 할당은 반드시 등호 사용: melody = \\relative c' { ... }
+10) 1·2번 엔딩/도돌이표는 자연어 금지. 오직 \\repeat volta N { ... } \\alternative { { ... } { ... } } 만 사용.
+11) "m.9", "1st Ending", "2nd Ending" 같은 마디·엔딩 라벨을 코드 줄에 절대 쓰지 말 것.
 
 LilyPond 소스만:`;
 }
@@ -291,4 +376,5 @@ module.exports = {
   extractLilypond,
   looksLikeLilypond,
   repairLilypond,
+  sanitizeLilypond,
 };
