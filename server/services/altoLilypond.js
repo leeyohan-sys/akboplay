@@ -275,6 +275,87 @@ function sanitizeLilypond(code) {
 }
 
 /**
+ * 문자열 리터럴 밖의 { } 깊이 계산
+ */
+function braceDepth(code) {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === '"' && code[i - 1] !== '\\') inString = !inString;
+    if (inString) continue;
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+  }
+  return depth;
+}
+
+/**
+ * 닫히지 않은 { 를 보완. \score 앞에 열린 블록이 있으면 그 앞에서 먼저 닫음
+ * (이전 버그가 unclosed \relative 안에 \score 를 넣어 unexpected \\score 를 유발함)
+ */
+function balanceBraces(code) {
+  let c = String(code || '');
+  const scoreIdx = c.search(/\\score\b/);
+  if (scoreIdx >= 0) {
+    const before = c.slice(0, scoreIdx);
+    const after = c.slice(scoreIdx);
+    const depth = braceDepth(before);
+    if (depth > 0 && depth <= 24) {
+      c = `${before.trimEnd()}\n${'}'.repeat(depth)}\n\n${after.trimStart()}`;
+    }
+  }
+
+  const rest = braceDepth(c);
+  if (rest > 0 && rest <= 24) {
+    c = `${c.trimEnd()}\n${'}'.repeat(rest)}\n`;
+  }
+  return c;
+}
+
+/**
+ * 이전 복구 버그로 삽입된 더미 score(c1) 제거
+ */
+function stripDummyScore(code) {
+  return String(code || '')
+    .replace(
+      /\n*\\score\s*\{\s*<<\s*\\new Staff\s*\{\s*\\clef treble\s*\\relative c'\s*\{\s*c1\s*\}\s*\}\s*>>\s*\\layout\s*\{\s*\}\s*\}/g,
+      '\n',
+    )
+    .replace(/\n*\\score\s*\{\s*<<\s*>>\s*\\layout\s*\{\s*\}\s*\}/g, '\n');
+}
+
+/**
+ * 변수로 정의된 성부가 있으면 \\score 로 묶음. top-level \\relative 만 있으면 그대로 둠
+ */
+function ensureScore(code) {
+  if (/\\score\b/.test(code)) return code;
+
+  const vars = [
+    ...String(code).matchAll(
+      /^([A-Za-z][A-Za-z0-9_]*)\s*=\s*\\(?:relative|new)\b/gm,
+    ),
+  ].map((m) => m[1]);
+
+  if (vars.length) {
+    const staves = vars
+      .map((v) => `    \\new Staff { \\clef treble \\${v} }`)
+      .join('\n');
+    return `${code.trim()}
+
+\\score {
+  <<
+${staves}
+  >>
+  \\layout { }
+}`;
+  }
+
+  // top-level \\relative 는 score 없이도 LilyPond가 렌더 가능
+  return code;
+}
+
+/**
  * \relative/\new Staff 없이 맨몸 음표만 있는 경우 score로 감싸 렌더 가능하게 함
  */
 function wrapOrphanMusic(code) {
@@ -284,7 +365,7 @@ function wrapOrphanMusic(code) {
   const preamble = [];
   const musicLines = [];
   let inHeader = false;
-  let braceDepth = 0;
+  let braceDepthHdr = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -302,12 +383,12 @@ function wrapOrphanMusic(code) {
       for (const ch of trimmed) {
         if (ch === '{') {
           inHeader = true;
-          braceDepth += 1;
+          braceDepthHdr += 1;
         } else if (ch === '}') {
-          braceDepth -= 1;
-          if (braceDepth <= 0) {
+          braceDepthHdr -= 1;
+          if (braceDepthHdr <= 0) {
             inHeader = false;
-            braceDepth = 0;
+            braceDepthHdr = 0;
           }
         }
       }
@@ -369,13 +450,11 @@ function repairLilypond(code, fileName) {
     );
   }
 
-  // 맨몸 음표만 있으면 Staff/relative로 감싸기
+  // 이전 버그의 더미 score 제거 → 중괄호 균형 → 맨몸 음표 감싸기 → 필요 시 score
+  c = stripDummyScore(c);
+  c = balanceBraces(c);
   c = wrapOrphanMusic(c);
-
-  if (!/\\score\b/.test(c) && /\\relative\b/.test(c)) {
-    // relative만 있으면 score 래퍼 추가
-    c += `\n\n\\score {\n  <<\n    ${/\\new\b/.test(c) ? '' : '\\new Staff { \\clef treble \\relative c\' { c1 } }\n'}\n  >>\n  \\layout { }\n}\n`;
-  }
+  c = ensureScore(c);
   return c.trim();
 }
 

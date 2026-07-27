@@ -10,6 +10,19 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
+function countBraceDepth(code) {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === '"' && code[i - 1] !== '\\') inString = !inString;
+    if (inString) continue;
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth = Math.max(0, depth - 1);
+  }
+  return depth;
+}
+
 const fenced = `설명입니다.
 \`\`\`lilypond
 \\version "2.24.0"
@@ -38,7 +51,8 @@ assert(looksLikeLilypond(ly), 'unclosed fence should parse');
 
 ly = repairLilypond(extractLilypond(bareRelative), 'test.png');
 assert(looksLikeLilypond(ly), 'bare relative should repair');
-assert(/\\version/.test(ly) && /\\score/.test(ly), 'repair adds version+score');
+assert(/\\version/.test(ly), 'repair adds version');
+assert(countBraceDepth(ly) === 0, 'bare relative braces balanced');
 
 ly = repairLilypond(extractLilypond(apology), 'x.png');
 assert(!looksLikeLilypond(ly), 'apology must fail');
@@ -105,5 +119,31 @@ assert(/\\new Staff\b/.test(repairedMd), 'orphan notes wrapped in Staff');
 assert(!/\*\s+Alto:/i.test(repairedMd), 'markdown Alto bullet removed');
 assert(!/\*\*m\.8/i.test(repairedMd), 'markdown measure bold removed');
 assert(/gis'8\./.test(repairedMd), 'alto notes preserved after bullet strip');
+
+// unclosed \relative 안에 더미 \score 가 끼어든 경우 (unexpected \\score)
+const nestedScore = `\\version "2.24.0"
+\\header { title = "보혈을_지나" tagline = ##f }
+\\relative c' {
+  gis'2 r4 b,
+
+\\score {
+  <<
+    \\new Staff { \\clef treble \\relative c' { c1 } }
+  >>
+  \\layout { }
+}`;
+const fixedNested = repairLilypond(nestedScore, 'x.png');
+assert(countBraceDepth(fixedNested) === 0, 'nested score braces balanced');
+assert(!/\\relative c'\s*\{\s*c1\s*\}/.test(fixedNested), 'dummy c1 score stripped');
+assert(/gis'2\s+r4\s+b,/.test(fixedNested), 'original notes kept');
+// \\score 가 열린 relative 안에 있지 않은지: \\score 앞 depth 0
+const scoreAt = fixedNested.search(/\\score\b/);
+if (scoreAt >= 0) {
+  assert(
+    countBraceDepth(fixedNested.slice(0, scoreAt)) === 0,
+    'score not nested inside unclosed block',
+  );
+}
+assert(looksLikeLilypond(fixedNested), 'fixed nested score still valid');
 
 console.log('ok: alto parse/repair smoke tests passed');
