@@ -48,7 +48,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'gemini-pages6-20260727',
+    version: 'gemini-all-pages-20260727',
   });
 });
 
@@ -58,8 +58,8 @@ app.get('/api/demo', (_req, res) => {
 
 /** PDF 악보 업로드 → 곡 후보 추출 */
 app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
-  // Render 프록시 타임아웃(~55s) 전에 반드시 응답
-  res.setTimeout(50000);
+  // 전체 페이지 Gemini 인식에 맞춰 여유 타임아웃
+  res.setTimeout(110000);
   try {
     // 프론트가 보낸 UTF-8 fileName을 우선 (multipart originalname 깨짐 방지)
     const fileName = decodeUploadFileName(
@@ -85,7 +85,7 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
       new Promise((_, reject) =>
         setTimeout(
           () => reject(new Error('분석 시간이 초과되었습니다.')),
-          45000,
+          100000,
         ),
       ),
     ]);

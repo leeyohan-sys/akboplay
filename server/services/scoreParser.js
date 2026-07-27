@@ -317,28 +317,31 @@ async function analyzePdfBuffer(buffer, fileName) {
     (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
   );
 
-  // Gemini가 일부만 잡아도 텍스트 지문으로 누락 곡 보강
-  const fromText = extractHymnsFromText(text).filter(
-    (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
-  );
-  if (fromText.length) {
-    const byNorm = new Map();
-    for (const s of [...songs, ...fromText]) {
-      const k = String(s.title || '')
-        .replace(/\s+/g, '')
-        .toLowerCase();
-      const prev = byNorm.get(k);
-      if (!prev || (s.confidence || 0) > (prev.confidence || 0)) {
-        byNorm.set(k, s);
-      } else if (prev && s.key && !prev.key) {
-        prev.key = s.key;
+  // Gemini가 곡을 판단했으면 그 결과를 그대로 사용 (지문·세트 보완 없음)
+  if (method !== 'gemini') {
+    // 텍스트 지문으로 누락 곡 보강
+    const fromText = extractHymnsFromText(text).filter(
+      (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
+    );
+    if (fromText.length) {
+      const byNorm = new Map();
+      for (const s of [...songs, ...fromText]) {
+        const k = String(s.title || '')
+          .replace(/\s+/g, '')
+          .toLowerCase();
+        const prev = byNorm.get(k);
+        if (!prev || (s.confidence || 0) > (prev.confidence || 0)) {
+          byNorm.set(k, s);
+        } else if (prev && s.key && !prev.key) {
+          prev.key = s.key;
+        }
       }
+      songs = [...byNorm.values()];
     }
-    songs = [...byNorm.values()];
-  }
 
-  // 알려진 찬양/찬송 세트 보완
-  songs = completeKnownWorshipSets(songs, fileName, text);
+    // 알려진 찬양/찬송 세트 보완
+    songs = completeKnownWorshipSets(songs, fileName, text);
+  }
 
   // 제목 정규화 후 중복 제거
   songs = songs.map((s) => ({

@@ -77,8 +77,8 @@ function parseJsonSongs(raw) {
     }));
 }
 
-/** PDF 앞 페이지를 JPEG로 렌더 (토큰/쿼터 절약) */
-async function pdfPagesToJpegs(buffer, { first = 3, scale = 1.25 } = {}) {
+/** PDF 전체 페이지를 JPEG로 렌더 (페이지 수 제한 없음) */
+async function pdfPagesToJpegs(buffer, { scale = 1.25 } = {}) {
   let sharp;
   try {
     sharp = require('sharp');
@@ -88,8 +88,12 @@ async function pdfPagesToJpegs(buffer, { first = 3, scale = 1.25 } = {}) {
 
   const parser = new PDFParse({ data: buffer });
   try {
+    const info = await parser.getInfo().catch(() => null);
+    const total = Math.max(1, Number(info?.total) || 1);
+
     const shot = await parser.getScreenshot({
-      first,
+      // 전체 페이지 — first에 총 페이지 수를 넣어 제한 없이 렌더
+      first: total,
       scale,
       imageBuffer: true,
       imageDataUrl: false,
@@ -128,17 +132,19 @@ async function extractSongsWithGemini(buffer, fileName) {
     'gemini-2.5-flash',
   ];
 
-  // 주일 예배 악보는 4페이지 이상인 경우가 많아 앞 6페이지까지 전송
-  const images = await pdfPagesToJpegs(buffer, { first: 6, scale: 1.25 });
+  // 페이지 수 제한 없이 전체 페이지를 Gemini에 전달
+  const images = await pdfPagesToJpegs(buffer, { scale: 1.25 });
   if (images.length === 0) {
     console.warn('[gemini] PDF 페이지 이미지 생성 실패');
     return null;
   }
 
-  const prompt = `교회 찬양/악보 PDF 이미지입니다. 곡 제목·조성(Key)·찬송가 번호를 JSON 배열로 추출하세요.
+  const prompt = `교회 찬양/악보 PDF 이미지입니다. 첨부된 **모든 페이지**를 보고 곡 제목·조성(Key)·찬송가 번호를 JSON 배열로 추출하세요.
 파일: ${fileName || 'score.pdf'}
 규칙:
+- 페이지를 빠짐없이 확인하세요. 앞쪽뿐 아니라 마지막 페이지 곡도 포함하세요.
 - 곡 제목만. 가사 한 줄·코드나열·페이지번호·"보통으로"·"후렴"은 제외.
+- 보이는 곡은 모두 넣고, 추측으로 없는 곡을 만들지 마세요.
 - 찬송가 번호(예: 452, 449, 144)가 보이면 number에 넣으세요.
 - 영문 원제(Near the Cross, Trust and Obey 등)가 보이면 한국어 정식 제목으로 바꾸세요.
 - key는 조성 (G, C, Bb, Em). Capo 숫자만 있으면 "".
@@ -156,6 +162,9 @@ async function extractSongsWithGemini(buffer, fileName) {
     })),
   ];
 
+  // 페이지가 많을수록 여유 시간 부여 (최대 2분)
+  const timeoutMs = Math.min(120000, 35000 + images.length * 12000);
+
   let lastError = null;
   for (const modelName of modelNames) {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -164,7 +173,7 @@ async function extractSongsWithGemini(buffer, fileName) {
           model: modelName,
           generationConfig: {
             temperature: 0.1,
-            maxOutputTokens: 2048,
+            maxOutputTokens: 4096,
           },
         });
 
@@ -174,7 +183,7 @@ async function extractSongsWithGemini(buffer, fileName) {
         const result = await Promise.race([
           model.generateContent({ contents: [{ role: 'user', parts }] }),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('gemini-timeout')), 40000),
+            setTimeout(() => reject(new Error('gemini-timeout')), timeoutMs),
           ),
         ]);
 
