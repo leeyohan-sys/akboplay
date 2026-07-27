@@ -289,7 +289,28 @@ const HYMN_FINGERPRINTS = [
     ],
     minHits: 2,
   },
+  {
+    title: '사명',
+    composer: '이권희',
+    number: undefined,
+    needles: [
+      '사명',
+      '이권희',
+      '주님이내게맡기신',
+      '그사명위해',
+      '이땅위해',
+      '나의사명',
+    ],
+    minHits: 2,
+  },
 ];
+
+/** 한글 2~3글자지만 실제 곡명인 경우 (junk 필터 예외) */
+const SHORT_KNOWN_TITLES = new Set(
+  ['사명', '십자가', '주기도'].map((t) =>
+    t.replace(/\s+/g, '').toLowerCase(),
+  ),
+);
 
 /** 함께 묶여 나오는 찬양 세트 — OCR이 일부만 잡아도 나머지를 보완 */
 const KNOWN_WORSHIP_SETS = [
@@ -307,7 +328,7 @@ const KNOWN_WORSHIP_SETS = [
   },
   {
     id: 'dedication-20260719',
-    fileHint: /헌신예배|20260719/,
+    fileHint: /20260719|헌신예배찬양/,
     titles: [
       { title: '푯대를 향하여', composer: '조유진' },
       { title: '예수 사랑하심은', composer: 'W. B. Bradbury' },
@@ -327,6 +348,52 @@ const KNOWN_WORSHIP_SETS = [
       { title: '주님의 마음을 본받는 자', composer: 'C. H. Gabriel', number: '455' },
       { title: '주님 약속하신 말씀 위에 서', composer: 'R. K. Carter', number: '546' },
       { title: '만족함이 없었네', composer: '전영택', number: '1186' },
+    ],
+  },
+  {
+    id: 'kwonsahoe-20250524',
+    fileHint: /20250524|권사회헌신/,
+    titles: [
+      { title: '푯대를 향하여', composer: '조유진' },
+      { title: '그리운 예루살렘', composer: undefined },
+      { title: '찬양하세', composer: undefined },
+      { title: '하늘 위에 주님밖에', composer: undefined },
+      { title: '두 손 들고', composer: undefined },
+    ],
+  },
+  {
+    id: 'ohu-yebae-202606014',
+    // 날짜로만 매칭 — '오후예배찬양'은 다른 날짜 PDF와 충돌
+    fileHint: /202606014/,
+    titles: [
+      { title: '예수 하나님의 공의', composer: undefined },
+      { title: '지금은 엘리야 때처럼', composer: undefined },
+      { title: '그날에 도적같이', composer: undefined, number: '1165' },
+      { title: '갈릴리 마을 그 숲속에서', composer: undefined },
+      { title: '나는 믿네', composer: undefined },
+    ],
+  },
+  {
+    id: 'ohu-yebae-20260628',
+    fileHint: /20260628/,
+    titles: [
+      { title: '내 모습 그대로', composer: '김지은' },
+      { title: '만족함이 없었네', composer: '최용덕' },
+      { title: '주의 음성을 내가 들으니', number: '540' },
+      { title: '갈 길을 밝히 보이시니', composer: 'G.F.Root', number: '524' },
+      { title: '주님여 이 손을', number: '57' },
+      { title: '사명', composer: '이권희' },
+    ],
+  },
+  {
+    id: 'adobe-scan-20260605',
+    fileHint: /2026\.\s*6\.\s*0?5/,
+    titles: [
+      { title: '성령 하나님 나를 만지소서', composer: undefined },
+      { title: '아무것도 두려워 말라', composer: undefined },
+      { title: '십자가를 질 수 있나', composer: undefined, number: '461' },
+      { title: '내가 매일 기쁘게', composer: undefined, number: '491' },
+      { title: '나의 안에 거하라', composer: undefined },
     ],
   },
 ];
@@ -361,9 +428,25 @@ function isJunkTitle(title) {
   if (isPageMarker(title)) return true;
   if (JUNK_TITLE_RE.test(title.trim())) return true;
   if (isJunkFileName(title)) return true;
-  if (hangulLen(title) < 4 && !/[A-Za-z]{4,}/.test(title)) return true;
+  // 2~3글자 곡명(사명 등)은 화이트리스트·지문으로 허용
+  if (hangulLen(title) < 4 && !/[A-Za-z]{4,}/.test(title)) {
+    const n = normalize(title);
+    const knownShort =
+      SHORT_KNOWN_TITLES.has(n) ||
+      HYMN_FINGERPRINTS.some((h) => normalize(h.title) === n);
+    if (!knownShort) return true;
+  }
   // 연도·짧은 코드 조각
   if (/^(19|20)\d{2}$/.test(title.trim())) return true;
+  // Gemini/OCR 깨진 조각 (공백 과다·의미 없는 한글 나열)
+  const compact = title.replace(/\s+/g, '');
+  if (hangulLen(title) >= 4 && title.length > 12 && title.split(/\s+/).length >= 5) {
+    // 단어가 너무 잘게 쪼개진 경우
+    const avg = title.length / Math.max(1, title.split(/\s+/).length);
+    if (avg < 2.2) return true;
+  }
+  if (/하\s*나닝|고로이음|함험기|입트안/.test(title)) return true;
+  if (compact.length <= 6 && /닝이시|이음함/.test(compact)) return true;
   return false;
 }
 
@@ -375,7 +458,9 @@ function isJunkFileName(fileName) {
 function canonicalizeTitle(title) {
   let t = String(title || '').replace(/\s+/g, ' ').trim();
   if (!t) return t;
-  // 주 예수의 은혜를 / 주예수은혜를 → 주 예수여 은혜를
+  // 표대 → 푯대
+  if (/^표대를\s*향하여/.test(t)) t = '푯대를 향하여';
+  // 주 예수의 은혜를 → 주 예수여 은혜를
   if (/주\s*예수[의여]?\s*은혜를/.test(t) && !/주\s*예수여\s*은혜를/.test(t)) {
     t = '주 예수여 은혜를';
   }

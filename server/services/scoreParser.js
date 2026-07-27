@@ -269,9 +269,8 @@ async function analyzePdfBuffer(buffer, fileName) {
       console.log('[analyze] Gemini 인식 시작…');
       const gemini = await extractSongsWithGemini(buffer, fileName);
       if (gemini?.songs?.length) {
-        songs = gemini.songs.filter(
-          (s) => !isPageMarker(s.title) && !isJunkTitle(s.title),
-        );
+        // Gemini 인식 곡명은 junk 필터 없이 모두 허용 (페이지 마커만 제외)
+        songs = gemini.songs.filter((s) => s.title && !isPageMarker(s.title));
         text = `${text}\n${gemini.rawText || ''}`;
         method = 'gemini';
         console.log(`[analyze] Gemini 완료 · 후보 ${songs.length}곡`);

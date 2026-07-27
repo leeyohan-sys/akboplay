@@ -4,7 +4,7 @@
  */
 const { randomUUID } = require('crypto');
 const { PDFParse } = require('pdf-parse');
-const { isJunkTitle, isPageMarker } = require('./hymnParser');
+const { isPageMarker } = require('./hymnParser');
 const { normalizeMusicKey } = require('./musicKey');
 
 function isConfigured() {
@@ -13,6 +13,12 @@ function isConfigured() {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Gemini가 준 제목은 junk 필터 없이 수용 (페이지 마커·빈 제목만 제외) */
+function acceptGeminiTitle(title) {
+  const t = String(title || '').trim();
+  return Boolean(t) && !isPageMarker(t);
 }
 
 function parseJsonSongs(raw) {
@@ -44,9 +50,7 @@ function parseJsonSongs(raw) {
             key: normalizeMusicKey(item?.key || item?.musicKey || ''),
           };
         })
-        .filter(
-          (s) => s.title && !isJunkTitle(s.title) && !isPageMarker(s.title),
-        );
+        .filter((s) => acceptGeminiTitle(s.title));
     } catch {
       return [];
     }
@@ -64,7 +68,7 @@ function parseJsonSongs(raw) {
     (m) => m[1].trim(),
   );
   return titles
-    .filter((t) => t && !isJunkTitle(t) && !isPageMarker(t))
+    .filter((t) => acceptGeminiTitle(t))
     .map((title) => ({
       title,
       composer: undefined,
