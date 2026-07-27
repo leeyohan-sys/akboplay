@@ -15,6 +15,7 @@ const {
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
 const { decodeUploadFileName } = require('./utils/fileName');
 const { generateAltoLilypond } = require('./services/altoLilypond');
+const { renderLilypond } = require('./services/renderLilypond');
 
 const app = express();
 const upload = multer({
@@ -49,7 +50,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'alto-rate-limit-20260727',
+    version: 'alto-pdf-render-20260727',
   });
 });
 
@@ -106,6 +107,50 @@ app.post('/api/alto-score', upload.single('score'), async (req, res) => {
       preview: err.preview,
       retryAfterMs: err.retryAfterMs,
     });
+  }
+});
+
+/** LilyPond 소스 → PDF/PNG 바이너리 렌더 (서버에 설치된 lilypond 사용) */
+app.post('/api/render-score', async (req, res) => {
+  res.setTimeout(100000);
+  try {
+    const { lilypond, fileName, format } = req.body || {};
+    if (
+      !lilypond ||
+      typeof lilypond !== 'string' ||
+      lilypond.trim().length < 10
+    ) {
+      return res.status(400).json({ error: 'lilypond 코드가 필요합니다.' });
+    }
+    const wantFormat = format === 'png' ? 'png' : 'pdf';
+
+    console.log(
+      `[render-score] ${fileName || 'score'} · format=${wantFormat} · chars=${lilypond.length}`,
+    );
+
+    const { pdf, png } = await renderLilypond(lilypond);
+    const buf = wantFormat === 'png' ? png : pdf;
+    if (!buf) {
+      return res
+        .status(500)
+        .json({ error: `${wantFormat.toUpperCase()} 생성에 실패했습니다.` });
+    }
+
+    const base = String(fileName || 'score').replace(/\.(ly|pdf|png)$/i, '');
+    res.setHeader(
+      'Content-Type',
+      wantFormat === 'png' ? 'image/png' : 'application/pdf',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="score.${wantFormat}"; filename*=UTF-8''${encodeURIComponent(base)}.${wantFormat}`,
+    );
+    return res.send(buf);
+  } catch (err) {
+    console.error('[render-score]', err);
+    return res
+      .status(500)
+      .json({ error: err.message || '악보 렌더에 실패했습니다.' });
   }
 });
 

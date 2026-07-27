@@ -51,6 +51,35 @@ function openBlobInNewTab(blob: Blob): boolean {
   }
 }
 
+/** 공유 시트로 파일 공유 시도 (성공/취소/미지원 여부 반환) */
+async function tryShareFile(
+  blob: Blob,
+  name: string,
+  text?: string,
+): Promise<'shared' | 'cancelled' | 'unsupported'> {
+  if (typeof navigator === 'undefined' || typeof File === 'undefined') {
+    return 'unsupported';
+  }
+  try {
+    const file = new File([blob], name, { type: blob.type });
+    const nav = navigator as Navigator & {
+      canShare?: (data?: ShareData) => boolean;
+      share?: (data: ShareData) => Promise<void>;
+    };
+    const data: ShareData = { files: [file], title: name, text };
+    if (nav.share && (!nav.canShare || nav.canShare(data))) {
+      await nav.share(data);
+      return 'shared';
+    }
+    return 'unsupported';
+  } catch (e) {
+    if (e instanceof Error && /AbortError|canceled|cancelled/i.test(e.name + e.message)) {
+      return 'cancelled';
+    }
+    return 'unsupported';
+  }
+}
+
 /**
  * LilyPond(.ly) 또는 텍스트 악보를 폰에 저장/공유
  * @returns 'shared' | 'downloaded' | 'opened' | 'failed'
@@ -66,46 +95,53 @@ export async function saveScoreTextFile(
   const blob = new Blob([content], { type: mime });
 
   // 1) 모바일: 시스템 공유 시트로 "파일에 저장" / AirDrop 등
-  if (typeof navigator !== 'undefined' && typeof File !== 'undefined') {
-    try {
-      const file = new File([blob], name, { type: mime });
-      const nav = navigator as Navigator & {
-        canShare?: (data?: ShareData) => boolean;
-        share?: (data: ShareData) => Promise<void>;
-      };
-      const data: ShareData = {
-        files: [file],
-        title: name,
-        text: '악보플레이 알토 악보 (LilyPond)',
-      };
-      if (nav.share && (!nav.canShare || nav.canShare(data))) {
-        await nav.share(data);
-        return 'shared';
-      }
-      // 파일 공유 미지원이면 텍스트만이라도
-      if (isMobileWeb() && nav.share) {
+  const shareResult = await tryShareFile(blob, name, '악보플레이 알토 악보 (LilyPond)');
+  if (shareResult === 'shared') return 'shared';
+  if (shareResult === 'cancelled') return 'failed';
+  // 파일 공유 미지원이면 텍스트만이라도
+  if (isMobileWeb() && typeof navigator !== 'undefined') {
+    const nav = navigator as Navigator & { share?: (data: ShareData) => Promise<void> };
+    if (nav.share) {
+      try {
         await nav.share({ title: name, text: content.slice(0, 50000) });
         return 'shared';
-      }
-    } catch (e) {
-      // 사용자가 공유 취소한 경우
-      if (e instanceof Error && /AbortError|canceled|cancelled/i.test(e.name + e.message)) {
-        return 'failed';
+      } catch {
+        /* 폴백으로 계속 진행 */
       }
     }
   }
 
   // 2) <a download> (Android Chrome 등)
-  if (anchorDownload(blob, name)) {
-    if (isMobileWeb()) {
-      // iOS는 download를 무시하고 새 탭처럼 동작하는 경우가 많음
-      return 'downloaded';
-    }
-    return 'downloaded';
-  }
+  if (anchorDownload(blob, name)) return 'downloaded';
 
   // 3) 새 탭 열기
   if (openBlobInNewTab(blob)) return 'opened';
+
+  return 'failed';
+}
+
+/**
+ * PDF/PNG 등 바이너리 악보를 "바로 보기" 우선으로 열기
+ * (새 탭에서 뷰어로 즉시 표시 → 실패 시 공유/다운로드로 폴백)
+ * @returns 'opened' | 'shared' | 'downloaded' | 'failed'
+ */
+export async function viewBinaryScoreFile(
+  fileName: string,
+  blob: Blob,
+): Promise<'opened' | 'shared' | 'downloaded' | 'failed'> {
+  const ext = fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : 'png';
+  const name = ensureFileName(fileName, ext);
+
+  // 1) 새 탭에서 즉시 뷰어로 표시
+  if (openBlobInNewTab(blob)) return 'opened';
+
+  // 2) 팝업 차단 등으로 실패하면 공유 시트
+  const shareResult = await tryShareFile(blob, name);
+  if (shareResult === 'shared') return 'shared';
+  if (shareResult === 'cancelled') return 'failed';
+
+  // 3) 최후: 다운로드
+  if (anchorDownload(blob, name)) return 'downloaded';
 
   return 'failed';
 }

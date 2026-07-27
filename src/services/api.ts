@@ -80,6 +80,37 @@ async function request<T>(
   }
 }
 
+/** 서버가 PDF/PNG 등 바이너리를 직접 응답하는 요청용 (JSON 파싱 안 함) */
+async function requestBlob(
+  path: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<Blob> {
+  const timeoutMs = init?.timeoutMs ?? 60000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status >= 502 && res.status <= 504) {
+        throw new Error(`Bad Gateway (${res.status})`);
+      }
+      throw new Error(
+        data.error || data.message || `요청 실패 (${res.status})`,
+      );
+    }
+    return await res.blob();
+  } catch (e) {
+    throw friendlyFetchError(e);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function blobFromUri(uri: string): Promise<Blob> {
   // 모바일 일부 브라우저는 blob: URL fetch가 실패함 → XHR 폴백
   try {
@@ -288,6 +319,15 @@ export const api = {
       timeoutMs: 190000,
     });
   },
+
+  /** LilyPond 소스 → PDF/PNG 렌더 (서버의 lilypond 바이너리 사용) */
+  renderAltoScore: (lilypond: string, fileName: string, format: 'pdf' | 'png') =>
+    requestBlob('/api/render-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lilypond, fileName, format }),
+      timeoutMs: 70000,
+    }),
 
   matchYoutube: (songs: { id: string; title: string; composer?: string }[]) =>
     request<{ songs: MatchedSong[] }>('/api/match', {
