@@ -222,7 +222,9 @@ async function generateAltoLilypond(buffer, fileName, mimeType) {
     },
   }));
 
-  const timeoutMs = Math.min(120000, 45000 + images.length * 15000);
+  // 라우트 예산(약 3분) 안에서 429 재시도·생성 완료
+  const deadlineMs = 170000;
+  const timeoutMs = Math.min(90000, 45000 + images.length * 15000);
   console.log(`[alto] LilyPond 생성 · pages=${images.length}`);
 
   let lastRaw = '';
@@ -236,6 +238,9 @@ async function generateAltoLilypond(buffer, fileName, mimeType) {
         maxOutputTokens: 8192,
       },
       timeoutMs,
+      deadlineMs: Math.max(30000, deadlineMs - round * 60000),
+      maxRetries: 2,
+      throwOnRateLimit: true,
       label: 'alto-ly',
     });
 

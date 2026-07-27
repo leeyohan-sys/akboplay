@@ -49,7 +49,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'alto-ly-parse-fix-20260727',
+    version: 'alto-rate-limit-20260727',
   });
 });
 
@@ -59,7 +59,8 @@ app.get('/api/demo', (_req, res) => {
 
 /** 악보 PDF/이미지 → 알토 2성부 LilyPond(.ly) */
 app.post('/api/alto-score', upload.single('score'), async (req, res) => {
-  res.setTimeout(120000);
+  // 429 대기(최대 ~60초) + 생성 시간을 위해 여유
+  res.setTimeout(200000);
   try {
     const fileName = decodeUploadFileName(
       req.body?.fileName || req.file?.originalname || 'score.pdf',
@@ -77,10 +78,13 @@ app.post('/api/alto-score', upload.single('score'), async (req, res) => {
     const result = await Promise.race([
       generateAltoLilypond(req.file.buffer, fileName, req.file.mimetype),
       new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error('알토 악보 생성 시간이 초과되었습니다.')),
-          110000,
-        ),
+        setTimeout(() => {
+          const e = new Error(
+            '알토 악보 생성 시간이 초과되었습니다. 1분 후 다시 시도해 주세요.',
+          );
+          e.code = 'TIMEOUT';
+          reject(e);
+        }, 180000),
       ),
     ]);
 
@@ -95,10 +99,12 @@ app.post('/api/alto-score', upload.single('score'), async (req, res) => {
     });
   } catch (err) {
     console.error('[alto-score]', err);
-    return res.status(500).json({
+    const status = err.code === 'RATE_LIMIT' ? 429 : 500;
+    return res.status(status).json({
       error: err.message || '알토 악보 생성에 실패했습니다.',
       code: err.code,
       preview: err.preview,
+      retryAfterMs: err.retryAfterMs,
     });
   }
 });

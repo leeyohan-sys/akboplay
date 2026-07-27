@@ -92,11 +92,24 @@ function enqueue(task) {
   return run;
 }
 
+function makeRateLimitError(waitMs) {
+  const sec = Math.max(1, Math.ceil((waitMs || 60000) / 1000));
+  const err = new Error(
+    `Gemini 요청이 많습니다. 약 ${sec}초 후 다시 시도해 주세요.`,
+  );
+  err.code = 'RATE_LIMIT';
+  err.retryAfterMs = waitMs || 60000;
+  return err;
+}
+
 /**
  * @param {object} opts
  * @param {string|Array} opts.contents - 문자열이면 텍스트 프롬프트, 배열이면 parts
  * @param {object} [opts.generationConfig]
- * @param {number} [opts.timeoutMs]
+ * @param {number} [opts.timeoutMs] - 단일 generateContent 호출 제한
+ * @param {number} [opts.deadlineMs] - 전체(재시도 포함) 마감까지 남은 ms. 초과 대기면 RATE_LIMIT로 즉시 실패
+ * @param {number} [opts.maxRetries] - 모델당 재시도 횟수 (기본 MAX_RETRIES_PER_MODEL)
+ * @param {boolean} [opts.throwOnRateLimit] - 429 한도 시 null 대신 예외
  * @param {string} [opts.label]
  * @returns {Promise<null | { text: string, model: string }>}
  */
@@ -107,8 +120,17 @@ async function generateContent(opts) {
     contents,
     generationConfig = { temperature: 0.1, maxOutputTokens: 4096 },
     timeoutMs = 60000,
+    deadlineMs,
+    maxRetries = MAX_RETRIES_PER_MODEL,
+    throwOnRateLimit = false,
     label = 'gemini',
   } = opts || {};
+
+  const startedAt = Date.now();
+  const deadlineAt =
+    typeof deadlineMs === 'number' && deadlineMs > 0
+      ? startedAt + deadlineMs
+      : null;
 
   return enqueue(async () => {
     const apiKey = process.env.GEMINI_API_KEY.trim();
@@ -119,10 +141,16 @@ async function generateContent(opts) {
       : [{ text: String(contents || '') }];
 
     let lastError = null;
+    const retries = Math.max(1, Number(maxRetries) || MAX_RETRIES_PER_MODEL);
 
     for (const modelName of MODEL_NAMES) {
-      for (let attempt = 0; attempt < MAX_RETRIES_PER_MODEL; attempt++) {
+      for (let attempt = 0; attempt < retries; attempt++) {
         try {
+          // 마감이 임박하면 대기하지 않고 즉시 안내
+          if (deadlineAt && Date.now() >= deadlineAt - 5000) {
+            throw makeRateLimitError(cooldownUntil - Date.now());
+          }
+
           await waitCooldown(label);
           await waitMinInterval();
 
@@ -136,12 +164,20 @@ async function generateContent(opts) {
           );
 
           lastCallAt = Date.now();
+          const callTimeout =
+            deadlineAt != null
+              ? Math.max(5000, Math.min(timeoutMs, deadlineAt - Date.now()))
+              : timeoutMs;
+
           const result = await Promise.race([
             model.generateContent({
               contents: [{ role: 'user', parts }],
             }),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('gemini-timeout')), timeoutMs),
+              setTimeout(
+                () => reject(new Error('gemini-timeout')),
+                callTimeout,
+              ),
             ),
           ]);
 
@@ -154,6 +190,11 @@ async function generateContent(opts) {
           return { text, model: modelName };
         } catch (err) {
           lastError = err;
+          if (err?.code === 'RATE_LIMIT') {
+            if (throwOnRateLimit) throw err;
+            return null;
+          }
+
           const msg = String(err.message || err);
           console.warn(`[${label}] ${modelName} 실패:`, msg.slice(0, 160));
 
@@ -161,13 +202,18 @@ async function generateContent(opts) {
             const wait = backoffMs(attempt, err);
             setCooldown(wait);
             console.warn(
-              `[${label}] 429 · ${Math.ceil(wait / 1000)}초 후 재시도 (${attempt + 1}/${MAX_RETRIES_PER_MODEL})`,
+              `[${label}] 429 · ${Math.ceil(wait / 1000)}초 후 재시도 (${attempt + 1}/${retries})`,
             );
-            // 마지막 재시도까지 실패하면 다른 모델로 연쇄 호출하지 않음 (같은 키 쿼터)
-            if (attempt >= MAX_RETRIES_PER_MODEL - 1) {
-              console.warn(`[${label}] 쿼터 한도 — 추가 모델 시도 중단`);
+
+            const remaining = deadlineAt ? deadlineAt - Date.now() : Infinity;
+            // HTTP 타임아웃 전에 끝나지 못하면 기다리지 않고 안내
+            if (wait + 20000 > remaining || attempt >= retries - 1) {
+              console.warn(`[${label}] 쿼터 한도 — 재시도 포기`);
+              const rl = makeRateLimitError(wait);
+              if (throwOnRateLimit) throw rl;
               return null;
             }
+
             await sleep(wait);
             continue; // 같은 모델 재시도
           }
@@ -192,6 +238,9 @@ async function generateContent(opts) {
         `[${label}] 최종 실패:`,
         String(lastError.message || lastError).slice(0, 200),
       );
+      if (throwOnRateLimit && isRateLimitError(lastError)) {
+        throw makeRateLimitError(parseRetryAfterMs(lastError) || BASE_BACKOFF_MS);
+      }
     }
     return null;
   });

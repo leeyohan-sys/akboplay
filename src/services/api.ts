@@ -263,7 +263,8 @@ export const api = {
     }>('/api/alto-score', {
       method: 'POST',
       body: form,
-      timeoutMs: 130000,
+      // 서버 429 재시도·생성(최대 ~3분)과 맞춤
+      timeoutMs: 190000,
     });
   },
 
@@ -284,7 +285,7 @@ export const api = {
     }>('/api/alto-score', {
       method: 'POST',
       body: form,
-      timeoutMs: 130000,
+      timeoutMs: 190000,
     });
   },
 
