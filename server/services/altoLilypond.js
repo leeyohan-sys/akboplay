@@ -116,17 +116,21 @@ function looksLikeLilypond(code) {
   const c = String(code || '');
   if (c.length < 20) return false;
 
-  // 실제 음표/성부 내용이 있어야 함 (\header+\version만으로는 거부)
-  const hasMusic =
+  // 주석 제외하고 마크다운 잔여 검사
+  const body = c.replace(/%[^\n]*/g, '');
+  const mdBullets = (body.match(/^\s*[\*\-]\s+/gm) || []).length;
+  if (mdBullets >= 2) return false;
+  if (/\*\*m\.\d+/i.test(body)) return false;
+
+  // \relative / \new Staff / << >> 중 하나는 반드시 있어야 함
+  // (맨몸 음표만 있는 \version+\header 는 렌더 시 NOTENAME_PITCH 오류)
+  const hasStructure =
     /\\relative\b/.test(c) ||
-    /\\score\b/.test(c) ||
     /\\new\s+(?:Choir)?Staff\b/.test(c) ||
-    /<<[\s\S]*>>/.test(c) ||
-    /\b[a-g](?:is|es)?['`,]*\d/.test(c); // c4, gis'8 등
+    (/\\score\b/.test(c) && /<<[\s\S]*>>/.test(c));
 
-  if (!hasMusic) return false;
+  if (!hasStructure) return false;
 
-  // 헤더/조성 등 보조 토큰 포함해 2개 이상이면 통과
   const hits = [
     /\\version\b/,
     /\\relative\b/,
@@ -137,7 +141,7 @@ function looksLikeLilypond(code) {
     /<<[\s\S]*>>/,
   ].filter((re) => re.test(c)).length;
 
-  return hits >= 2 || (/\\version\b/.test(c) && hasMusic);
+  return hits >= 2;
 }
 
 /**
@@ -169,6 +173,25 @@ function sanitizeLilypond(code) {
       // 펜스/백틱만 있는 줄 삭제 (undefined character or shorthand: ` 방지)
       if (/^`+$/.test(trimmed)) return '';
 
+      // 마크다운 목록/볼드 마디 라벨 (* Alto:, * **m.8**: 등)
+      if (/^[\*\-]\s+\*\*[^*]+\*\*:?\s*$/.test(trimmed)) {
+        return `% ${trimmed.replace(/\*\*/g, '')}`;
+      }
+      if (/^[\*\-]\s+/.test(trimmed) && !/\\/.test(trimmed)) {
+        // "* Alto: gis'8. ..." → 음표만 남김 / 음표 없으면 주석
+        let body = trimmed
+          .replace(/^[\*\-]\s+/, '')
+          .replace(/\*\*/g, '')
+          .replace(/^(?:Alto|Melody|Soprano|Tenor|Bass)\s*:\s*/i, '')
+          .replace(/^m\.\d+\b[^:]*:\s*/i, '')
+          .trim();
+        if (!/\b[a-g](?:is|es)?[,']*\d/i.test(body)) {
+          return `% ${trimmed}`;
+        }
+        const indent = (line.match(/^[ \t]*/) || [''])[0];
+        return `${indent}${body}`;
+      }
+
       // 마디/엔딩 자연어 라벨만 있는 줄 → 주석
       if (
         /^m\.\d+\b/i.test(trimmed) &&
@@ -184,9 +207,10 @@ function sanitizeLilypond(code) {
         return `% ${trimmed}`;
       }
 
+      // 인라인 볼드 제거
+      let out = line.replace(/\*\*/g, '');
       // "m.9 (1st Ending: E B): <음표…>" → 음표만 남김
-      // 괄호 안 콜론이 있어도 라벨 전체(마지막 바깥 콜론까지)를 제거
-      let out = line.replace(
+      out = out.replace(
         /^([ \t]*)m\.\d+\b(?:\s*\([^)]*\))?\s*:\s*/i,
         '$1',
       );
@@ -250,6 +274,74 @@ function sanitizeLilypond(code) {
   return c;
 }
 
+/**
+ * \relative/\new Staff 없이 맨몸 음표만 있는 경우 score로 감싸 렌더 가능하게 함
+ */
+function wrapOrphanMusic(code) {
+  if (/\\(?:relative|new\s+(?:Choir)?Staff)\b/.test(code)) return code;
+
+  const lines = String(code || '').split(/\r?\n/);
+  const preamble = [];
+  const musicLines = [];
+  let inHeader = false;
+  let braceDepth = 0;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (!musicLines.length) preamble.push(line);
+      continue;
+    }
+    if (trimmed.startsWith('%')) {
+      preamble.push(line);
+      continue;
+    }
+
+    if (/\\header\b/.test(trimmed) || inHeader) {
+      preamble.push(line);
+      for (const ch of trimmed) {
+        if (ch === '{') {
+          inHeader = true;
+          braceDepth += 1;
+        } else if (ch === '}') {
+          braceDepth -= 1;
+          if (braceDepth <= 0) {
+            inHeader = false;
+            braceDepth = 0;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (/^\\(?:version|paper|layout|midi|book)\b/.test(trimmed)) {
+      preamble.push(line);
+      continue;
+    }
+
+    if (/\b[a-g](?:is|es)?[,']*\d/i.test(trimmed)) {
+      musicLines.push(trimmed);
+      continue;
+    }
+
+    preamble.push(`% ${trimmed}`);
+  }
+
+  if (!musicLines.length) return code;
+
+  return `${preamble.join('\n').trim()}
+
+\\score {
+  \\new Staff {
+    \\clef treble
+    \\relative c' {
+      ${musicLines.join('\n      ')}
+    }
+  }
+  \\layout { }
+}`.trim();
+}
+
 /** 최소한의 헤더를 붙여 유효 .ly 로 복구 */
 function repairLilypond(code, fileName) {
   let c = sanitizeLilypond(String(code || '').trim());
@@ -267,10 +359,6 @@ function repairLilypond(code, fileName) {
   if (!/\\version\b/.test(c)) {
     c = `\\version "2.24.0"\n\n${c}`;
   }
-  if (!/\\score\b/.test(c) && /\\relative\b/.test(c)) {
-    // relative만 있으면 score 래퍼 추가
-    c += `\n\n\\score {\n  <<\n    ${/\\new\b/.test(c) ? '' : '\\new Staff { \\clef treble \\relative c\' { c1 } }\n'}\n  >>\n  \\layout { }\n}\n`;
-  }
   if (!/\\header\b/.test(c)) {
     const title = String(fileName || 'Alto Score')
       .replace(/\.(pdf|png|jpe?g|webp)$/i, '')
@@ -279,6 +367,14 @@ function repairLilypond(code, fileName) {
       /(\\version\s+"[^"]+"\s*)/,
       `$1\n\\header { title = "${title}" tagline = ##f }\n`,
     );
+  }
+
+  // 맨몸 음표만 있으면 Staff/relative로 감싸기
+  c = wrapOrphanMusic(c);
+
+  if (!/\\score\b/.test(c) && /\\relative\b/.test(c)) {
+    // relative만 있으면 score 래퍼 추가
+    c += `\n\n\\score {\n  <<\n    ${/\\new\b/.test(c) ? '' : '\\new Staff { \\clef treble \\relative c\' { c1 } }\n'}\n  >>\n  \\layout { }\n}\n`;
   }
   return c.trim();
 }
@@ -305,6 +401,7 @@ ${extra}
 9) 변수 할당은 반드시 등호 사용: melody = \\relative c' { ... }
 10) 1·2번 엔딩/도돌이표는 자연어 금지. 오직 \\repeat volta N { ... } \\alternative { { ... } { ... } } 만 사용.
 11) "m.9", "1st Ending", "2nd Ending" 같은 마디·엔딩 라벨을 코드 줄에 절대 쓰지 말 것.
+12) 마크다운 금지: *, -, **, "#", "Alto:", "Melody:" 목록/설명 금지. 음표는 반드시 \\relative { } 또는 \\new Staff { } 안에만.
 
 LilyPond 소스만:`;
 }

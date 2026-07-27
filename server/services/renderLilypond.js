@@ -8,7 +8,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { sanitizeLilypond } = require('./altoLilypond');
+const { repairLilypond } = require('./altoLilypond');
 
 const RENDER_TIMEOUT_MS = Number(process.env.LILYPOND_TIMEOUT_MS || 50000);
 
@@ -91,8 +91,8 @@ async function renderLilypond(lilypondSource) {
     throw e;
   }
 
-  // Gemini가 넣은 자연어 마디 라벨 등 비문법 정리 후 렌더
-  const source = sanitizeLilypond(lilypondSource);
+  // Gemini가 넣은 자연어/마크다운·맨몸 음표를 정리·감싼 뒤 렌더
+  const source = repairLilypond(lilypondSource, 'score');
 
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'alto-ly-'));
   const id = crypto.randomBytes(4).toString('hex');

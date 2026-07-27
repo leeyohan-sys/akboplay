@@ -91,4 +91,19 @@ const leadingTick = sanitizeLilypond(
 assert(!/`/.test(leadingTick), 'standalone and octave backticks cleaned');
 assert(/c'4/.test(leadingTick), 'c\`4 became c\'4');
 
+// 마크다운 분석 + 맨몸 음표 → 구조로 복구
+const mdOrphan = `\\version "2.24.0"
+\\header { title = "보혈을_지나_1(E)" tagline = ##f }
+b'8. b'16 a'8. gis'16 ~ gis'8. gis'16 fis'8. e'16
+  * Alto: gis'8. gis'16 fis'8. e'16 ~ e'8. e'16 dis'8. cis'16
+  * **m.8 (A - B)**:`;
+assert(!looksLikeLilypond(mdOrphan), 'raw markdown orphan must be rejected');
+const repairedMd = repairLilypond(mdOrphan, '보혈을_지나_1(E).png');
+assert(looksLikeLilypond(repairedMd), 'repaired markdown orphan becomes valid');
+assert(/\\relative\b/.test(repairedMd), 'orphan notes wrapped in relative');
+assert(/\\new Staff\b/.test(repairedMd), 'orphan notes wrapped in Staff');
+assert(!/\*\s+Alto:/i.test(repairedMd), 'markdown Alto bullet removed');
+assert(!/\*\*m\.8/i.test(repairedMd), 'markdown measure bold removed');
+assert(/gis'8\./.test(repairedMd), 'alto notes preserved after bullet strip');
+
 console.log('ok: alto parse/repair smoke tests passed');
