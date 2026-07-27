@@ -49,7 +49,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'alto-lilypond-20260727',
+    version: 'alto-ly-parse-fix-20260727',
   });
 });
 
@@ -98,6 +98,7 @@ app.post('/api/alto-score', upload.single('score'), async (req, res) => {
     return res.status(500).json({
       error: err.message || '알토 악보 생성에 실패했습니다.',
       code: err.code,
+      preview: err.preview,
     });
   }
 });
