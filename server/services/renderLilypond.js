@@ -136,6 +136,18 @@ async function renderLilypond(lilypondSource) {
   } catch (err) {
     if (err.code === 'NO_LILYPOND') throw err;
     const detail = summarizeLilypondError(err.stderr || err.message || err);
+    // 디버그: 실패 줄 근처 소스 미리보기
+    const lineMatch = String(detail).match(/:(\d+):\d+:\s*error:/i);
+    if (lineMatch) {
+      const n = Number(lineMatch[1]);
+      const lines = source.split(/\r?\n/);
+      const from = Math.max(0, n - 3);
+      const snippet = lines
+        .slice(from, n + 2)
+        .map((l, i) => `${from + i + 1}| ${l}`)
+        .join('\n');
+      console.error('[renderLilypond] source near error:\n' + snippet);
+    }
     console.error('[renderLilypond] failed:', detail);
     const e = new Error(
       detail

@@ -70,4 +70,25 @@ assert(/alto\s*=\s*\\relative/.test(cleaned), 'missing = before relative fixed')
 assert(looksLikeLilypond(cleaned), 'sanitized ending prose still valid');
 console.log('sanitized preview:\n', cleaned);
 
+// 마크다운 펜스·고아 백틱 / 옥타브 백틱→아포스트로피
+const fencedJunk = `\`\`\`lilypond
+\\version "2.24.0"
+\\header { title = "x" }
+\`
+melody = \\relative c' { c\`4 d\`\` e' }
+\`\`\`
+\\score { << \\new Staff { \\melody } >> \\layout{} }`;
+const noTicks = sanitizeLilypond(extractLilypond(fencedJunk));
+assert(!/```/.test(noTicks), 'fences removed');
+assert(!/`/.test(noTicks), 'all backticks removed or converted');
+assert(/c'4/.test(noTicks), 'octave backtick converted to apostrophe');
+assert(/d''/.test(noTicks), 'double octave backtick converted');
+assert(looksLikeLilypond(repairLilypond(noTicks, 'x.png')), 'fence junk still valid');
+
+const leadingTick = sanitizeLilypond(
+  `\\version "2.24.0"\n\`\nc\`4 d4\n\\relative c' { e4 }`,
+);
+assert(!/`/.test(leadingTick), 'standalone and octave backticks cleaned');
+assert(/c'4/.test(leadingTick), 'c\`4 became c\'4');
+
 console.log('ok: alto parse/repair smoke tests passed');

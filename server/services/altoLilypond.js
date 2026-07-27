@@ -83,10 +83,15 @@ function extractLilypond(raw) {
     /```(?:lilypond|lily|ly)?\s*\r?\n?([\s\S]*?)(?:```|$)/gi;
   let best = '';
   for (const m of text.matchAll(fenceRe)) {
-    const body = String(m[1] || '').trim();
+    const body = String(m[1] || '')
+      .replace(/^```(?:lilypond|lily|ly)?\s*/i, '')
+      .replace(/```\s*$/g, '')
+      .trim();
     if (body.length > best.length) best = body;
   }
   if (best) text = best;
+  // 펜스 추출 실패 시에도 잔여 ``` 제거
+  text = text.replace(/```(?:lilypond|lily|ly)?/gi, '');
 
   // HTML <pre> 등
   const pre = text.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
@@ -139,20 +144,30 @@ function looksLikeLilypond(code) {
  * Gemini가 자주 넣는 비문법 조각을 정리
  * 예: "m.9 (1st Ending: E B): e4 b4" → "e4 b4"
  * 예: "alto \\relative c' {" → "alto = \\relative c' {"
+ * 예: 마크다운 ``` / 고아 백틱 제거
  */
 function sanitizeLilypond(code) {
   let c = String(code || '');
   if (!c.trim()) return c;
 
+  // 스마트쿼트·유사 문자를 ASCII로 (LilyPond는 ' ` 만 옥타브로 인식)
   c = c
     .replace(/[\u201C\u201D]/g, '"')
-    .replace(/[\u2018\u2019]/g, "'");
+    .replace(/[\u2018\u2019\u2032]/g, "'")
+    .replace(/[\u00B4\u201B\u2035]/g, '`');
+
+  // 본문 어디에 남아 있어도 마크다운 펜스 토큰 제거
+  c = c.replace(/```(?:lilypond|lily|ly)?/gi, '');
 
   c = c
     .split(/\r?\n/)
     .map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('%')) return line;
+      let trimmed = line.trim();
+      if (!trimmed) return '';
+      if (trimmed.startsWith('%')) return line;
+
+      // 펜스/백틱만 있는 줄 삭제 (undefined character or shorthand: ` 방지)
+      if (/^`+$/.test(trimmed)) return '';
 
       // 마디/엔딩 자연어 라벨만 있는 줄 → 주석
       if (
@@ -184,6 +199,18 @@ function sanitizeLilypond(code) {
         /^([ \t]*)m\.\d+\b[^:\\{]*:\s*(?=[a-grA-GR\\<{])/i,
         '$1',
       );
+
+      // 줄 맨 앞 고아 백틱 (`c4 → c4)
+      out = out.replace(/^([ \t]*)`+([a-gA-G])/g, '$1$2');
+      // 마크다운 인라인 코드 ``c4`` → c4
+      out = out.replace(/`([a-g](?:is|es)?[,']*\d*\.*)`/gi, '$1');
+      // LilyPond 옥타브는 ' 와 , 만 허용 — 음표 뒤 백틱을 아포스트로피로 변환
+      out = out.replace(/([a-g](?:is|es)?[,']*)`+/gi, (m) =>
+        m.replace(/`/g, "'"),
+      );
+      // 남은 고아 백틱(마크다운 잔여 등) 전부 제거
+      out = out.replace(/`+/g, '');
+      if (/^[ \t]*$/.test(out)) return '';
 
       // "melody \\relative" / "alto \\lyricmode" 처럼 = 누락 보정
       out = out.replace(
@@ -217,7 +244,8 @@ function sanitizeLilypond(code) {
 
       return out;
     })
-    .join('\n');
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n');
 
   return c;
 }
