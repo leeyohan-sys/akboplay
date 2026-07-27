@@ -13,6 +13,7 @@ const {
   createPlaylist,
 } = require('./services/youtube');
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
+const { decodeUploadFileName } = require('./utils/fileName');
 
 const app = express();
 const upload = multer({
@@ -31,13 +32,23 @@ app.use(
 // Express 5 + path-to-regexp는 '*' 와일드카드 불가 → cors 미들웨어가 OPTIONS 처리
 app.use(express.json({ limit: '2mb' }));
 
+// JSON 응답 UTF-8 명시
+app.use((_req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return originalJson(body);
+  };
+  next();
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'hymn-20260724-scan',
+    version: 'utf8-filename-20260727',
   });
 });
 
@@ -50,7 +61,10 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
   // Render 프록시 타임아웃(~55s) 전에 반드시 응답
   res.setTimeout(50000);
   try {
-    const fileName = req.file?.originalname || req.body?.fileName || 'score.pdf';
+    // 프론트가 보낸 UTF-8 fileName을 우선 (multipart originalname 깨짐 방지)
+    const fileName = decodeUploadFileName(
+      req.body?.fileName || req.file?.originalname || 'score.pdf',
+    );
 
     if (!req.file) {
       if (fileName === 'demo-score.pdf' || req.body?.demo === '1') {
@@ -81,7 +95,9 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
     // 타임아웃/OCR 실패여도 앱이 멈추지 않도록 빈 목록 반환
     if (/초과|timeout|aborted/i.test(String(err.message || ''))) {
       return res.json({
-        fileName: req.file?.originalname || 'score.pdf',
+        fileName: decodeUploadFileName(
+          req.body?.fileName || req.file?.originalname || 'score.pdf',
+        ),
         method: 'heuristic',
         note: '서버에서 문서 인식이 오래 걸려 중단되었습니다. 곡을 직접 추가해 주세요.',
         songs: [],

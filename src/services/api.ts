@@ -111,6 +111,7 @@ async function buildPdfFormData(
 ): Promise<FormData> {
   const form = new FormData();
   const name = fileName || 'score.pdf';
+  form.append('fileName', name);
 
   if (Platform.OS === 'web') {
     let blob: Blob;
@@ -207,7 +208,10 @@ export const api = {
   /** 웹에서 File 객체를 바로 업로드 */
   analyzePdfFile: async (file: File): Promise<AnalyzeResult> => {
     const form = new FormData();
-    form.append('pdf', file, file.name || 'score.pdf');
+    const name = file.name || 'score.pdf';
+    // UTF-8 텍스트 필드로 파일명 별도 전달 (multipart filename 깨짐 방지)
+    form.append('fileName', name);
+    form.append('pdf', file, name);
     return request<AnalyzeResult>('/api/analyze', {
       method: 'POST',
       body: form,
