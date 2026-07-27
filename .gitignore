@@ -37,6 +37,9 @@ server/.env
 # typescript
 *.tsbuildinfo
 
+# LilyPond 바이너리 (빌드 시 다운로드)
+server/vendor/
+
 # generated native folders
 /ios
 /android

@@ -15,7 +15,10 @@ const {
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
 const { decodeUploadFileName } = require('./utils/fileName');
 const { generateAltoLilypond } = require('./services/altoLilypond');
-const { renderLilypond } = require('./services/renderLilypond');
+const {
+  renderLilypond,
+  isLilypondAvailable,
+} = require('./services/renderLilypond');
 
 const app = express();
 const upload = multer({
@@ -50,7 +53,8 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'alto-pdf-render-20260727',
+    lilypondConfigured: isLilypondAvailable(),
+    version: 'alto-ly-vendor-20260727',
   });
 });
 

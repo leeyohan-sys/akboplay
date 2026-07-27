@@ -1,12 +1,13 @@
 services:
   - type: web
     name: akboplay-api
-    runtime: docker
+    # 기존 서비스가 Node 런타임이라 Docker 전환이 막힐 수 있음 →
+    # postinstall로 공식 Linux lilypond 바이너리를 vendor에 설치
+    runtime: node
     plan: free
     rootDir: server
-    # LilyPond 바이너리가 필요해 Docker(Debian + apt lilypond)로 빌드
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    buildCommand: npm install
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
