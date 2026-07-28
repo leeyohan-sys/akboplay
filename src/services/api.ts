@@ -80,37 +80,6 @@ async function request<T>(
   }
 }
 
-/** 서버가 PDF/PNG 등 바이너리를 직접 응답하는 요청용 (JSON 파싱 안 함) */
-async function requestBlob(
-  path: string,
-  init?: RequestInit & { timeoutMs?: number },
-): Promise<Blob> {
-  const timeoutMs = init?.timeoutMs ?? 60000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (res.status >= 502 && res.status <= 504) {
-        throw new Error(`Bad Gateway (${res.status})`);
-      }
-      throw new Error(
-        data.error || data.message || `요청 실패 (${res.status})`,
-      );
-    }
-    return await res.blob();
-  } catch (e) {
-    throw friendlyFetchError(e);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function blobFromUri(uri: string): Promise<Blob> {
   // 모바일 일부 브라우저는 blob: URL fetch가 실패함 → XHR 폴백
   try {
@@ -249,85 +218,6 @@ export const api = {
       timeoutMs: 120000,
     });
   },
-
-  /** 알토 2성부 LilyPond 생성 (네이티브 URI) */
-  generateAltoScore: async (
-    uri: string,
-    fileName: string,
-    file?: File | Blob | null,
-    mimeType?: string,
-  ) => {
-    const form = new FormData();
-    const name = fileName || 'score.pdf';
-    form.append('fileName', name);
-
-    if (Platform.OS === 'web') {
-      let blob: Blob;
-      if (file) blob = file;
-      else blob = await blobFromUri(uri);
-      if (!blob || blob.size < 20) {
-        throw new Error('악보 파일이 비어 있습니다.');
-      }
-      const upload =
-        typeof File !== 'undefined'
-          ? new File([blob], name, {
-              type: mimeType || blob.type || 'application/octet-stream',
-            })
-          : blob;
-      form.append('score', upload, name);
-    } else {
-      form.append('score', {
-        uri,
-        name,
-        type: mimeType || 'application/octet-stream',
-      } as unknown as Blob);
-    }
-
-    return request<{
-      fileName: string;
-      title?: string;
-      key?: string;
-      pageCount?: number;
-      lilypond: string;
-      note?: string;
-      model?: string;
-    }>('/api/alto-score', {
-      method: 'POST',
-      body: form,
-      // 서버 429 재시도·생성(최대 ~3분)과 맞춤
-      timeoutMs: 190000,
-    });
-  },
-
-  /** 웹 File → 알토 LilyPond */
-  generateAltoScoreFile: async (file: File) => {
-    const form = new FormData();
-    const name = file.name || 'score.pdf';
-    form.append('fileName', name);
-    form.append('score', file, name);
-    return request<{
-      fileName: string;
-      title?: string;
-      key?: string;
-      pageCount?: number;
-      lilypond: string;
-      note?: string;
-      model?: string;
-    }>('/api/alto-score', {
-      method: 'POST',
-      body: form,
-      timeoutMs: 190000,
-    });
-  },
-
-  /** LilyPond 소스 → PDF/PNG 렌더 (서버의 lilypond 바이너리 사용) */
-  renderAltoScore: (lilypond: string, fileName: string, format: 'pdf' | 'png') =>
-    requestBlob('/api/render-score', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lilypond, fileName, format }),
-      timeoutMs: 70000,
-    }),
 
   matchYoutube: (songs: { id: string; title: string; composer?: string }[]) =>
     request<{ songs: MatchedSong[] }>('/api/match', {
