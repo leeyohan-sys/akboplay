@@ -355,8 +355,8 @@ export function BeatDetectScreen({}: Props) {
 
             <Text style={[typography.body, styles.hint]}>
               {mode === 'auto'
-                ? '마이크가 BPM을 듣고, 아래 원을 탭하면 가이드 템포로 잠급니다.\nBPM이 잡히면 자동으로 4박 점멸합니다.'
-                : '원을 탭하거나 −/+ · 저장 BPM으로 점멸합니다.'}
+                ? '마이크가 BPM을 듣고 4박으로 점멸합니다.'
+                : '프리셋 또는 −/+ 로 BPM을 정하면 점멸합니다.'}
             </Text>
 
             {/* 대형 BPM + −/+ */}
@@ -378,22 +378,6 @@ export function BeatDetectScreen({}: Props) {
                 >
                   <Text style={styles.bpmLabel}>BPM</Text>
                   <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
-                  {driftLabel ? (
-                    <Text
-                      style={[
-                        styles.drift,
-                        drift > 0.3
-                          ? styles.driftUp
-                          : drift < -0.3
-                            ? styles.driftDown
-                            : styles.driftOk,
-                      ]}
-                    >
-                      {driftLabel}
-                    </Text>
-                  ) : (
-                    <Text style={styles.driftPlaceholder}>탭</Text>
-                  )}
                 </Animated.View>
               </Pressable>
 
@@ -406,25 +390,8 @@ export function BeatDetectScreen({}: Props) {
               </Pressable>
             </View>
 
-            <Text style={styles.status}>
-              {mode === 'tap'
-                ? bpm > 0
-                  ? activePreset != null
-                    ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸 중`
-                    : `${formatBpm(bpm)} BPM · 점멸 중`
-                  : '원을 탭하거나 프리셋 · −/+ 로 BPM을 정하세요'
-                : listening
-                  ? bpm > 0
-                    ? guideBpm > 0
-                      ? `가이드 ${formatBpm(guideBpm)} · 자동 점멸`
-                      : `${formatBpm(bpm)} BPM · 자동 점멸`
-                    : '듣는 중… BPM 측정 중'
-                  : guideBpm > 0
-                    ? `가이드 ${formatBpm(guideBpm)} 설정됨 · 시작을 누르세요`
-                    : '대기 중 · 시작 또는 원 탭(가이드)'}
-            </Text>
-
-            {/* 4박 인디케이터 */}
+            {/* 4박 인디케이터 — 크게, 원 바로 아래 */}
+            <Text style={styles.beatsLabel}>4 BEATS</Text>
             <View style={styles.beats}>
               {[1, 2, 3, 4].map((n) => {
                 const active = beat === n;
@@ -446,6 +413,24 @@ export function BeatDetectScreen({}: Props) {
                 );
               })}
             </View>
+
+            <Text style={styles.status}>
+              {mode === 'tap'
+                ? bpm > 0
+                  ? activePreset != null
+                    ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸 중`
+                    : `${formatBpm(bpm)} BPM · 점멸 중`
+                  : '프리셋 또는 −/+ 로 BPM을 정하세요'
+                : listening
+                  ? bpm > 0
+                    ? guideBpm > 0
+                      ? `가이드 ${formatBpm(guideBpm)} · 자동 점멸`
+                      : `${formatBpm(bpm)} BPM · 자동 점멸`
+                    : '듣는 중… BPM 측정 중'
+                  : guideBpm > 0
+                    ? `가이드 ${formatBpm(guideBpm)} · 시작을 누르세요`
+                    : '대기 중 · 시작 버튼을 누르세요'}
+            </Text>
 
             {/* ×½ / ×2 */}
             <View style={styles.factorRow}>
@@ -475,19 +460,16 @@ export function BeatDetectScreen({}: Props) {
             </View>
 
             {mode === 'auto' ? (
-              <>
-                <View style={styles.levelTrack}>
-                  <View
-                    style={[
-                      styles.levelFill,
-                      {
-                        width: `${Math.round(Math.min(1, level) * 100)}%`,
-                      },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.levelHint}>마이크 입력 레벨</Text>
-              </>
+              <View style={styles.levelTrack}>
+                <View
+                  style={[
+                    styles.levelFill,
+                    {
+                      width: `${Math.round(Math.min(1, level) * 100)}%`,
+                    },
+                  ]}
+                />
+              </View>
             ) : null}
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -511,8 +493,8 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-    paddingHorizontal: 22,
-    paddingTop: 20,
+    paddingHorizontal: 18,
+    paddingTop: 12,
     alignItems: 'center',
     maxWidth: 560,
     width: '100%',
@@ -523,12 +505,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 2.2,
     color: colors.brass,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   modeRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   modeChip: {
     paddingHorizontal: 16,
@@ -552,9 +534,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   hint: {
-    marginTop: 4,
+    marginTop: 2,
     textAlign: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -562,13 +544,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    marginBottom: 8,
+    gap: 12,
+    marginBottom: 14,
   },
   nudgeBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     borderWidth: 1.5,
     borderColor: 'rgba(201, 162, 39, 0.55)',
     backgroundColor: 'rgba(30, 44, 68, 0.75)',
@@ -586,9 +568,9 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   pulseRing: {
-    width: 168,
-    height: 168,
-    borderRadius: 84,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
     borderWidth: 2,
     borderColor: 'rgba(201, 162, 39, 0.45)',
     backgroundColor: 'rgba(30, 44, 68, 0.55)',
@@ -602,10 +584,10 @@ const styles = StyleSheet.create({
   },
   bpmValue: {
     fontFamily: 'Noto Serif KR, Batang, Georgia, serif',
-    fontSize: 52,
+    fontSize: 48,
     fontWeight: '700',
     color: colors.cream,
-    lineHeight: 60,
+    lineHeight: 56,
     marginTop: 2,
   },
   drift: {
@@ -623,70 +605,84 @@ const styles = StyleSheet.create({
     color: colors.mist,
     letterSpacing: 2,
   },
-  status: {
+  beatsLabel: {
     ...typography.caption,
-    marginBottom: 20,
-    textAlign: 'center',
-    lineHeight: 18,
+    letterSpacing: 2,
+    color: colors.brass,
+    marginBottom: 8,
+    fontSize: 11,
   },
   beats: {
     flexDirection: 'row',
-    gap: 14,
-    marginBottom: 18,
+    width: '100%',
+    maxWidth: 360,
+    gap: 10,
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
   beatDot: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 1.5,
-    borderColor: 'rgba(201, 162, 39, 0.35)',
-    backgroundColor: 'rgba(30, 44, 68, 0.55)',
+    flex: 1,
+    aspectRatio: 1,
+    maxHeight: 78,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: colors.brass,
+    backgroundColor: 'rgba(201, 162, 39, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   beatDotActive: {
     borderColor: colors.brassBright,
-    backgroundColor: 'rgba(201, 162, 39, 0.35)',
-    transform: [{ scale: 1.08 }],
+    backgroundColor: 'rgba(224, 188, 58, 0.45)',
+    transform: [{ scale: 1.04 }],
   },
   beatDotOne: {
-    backgroundColor: 'rgba(224, 188, 58, 0.55)',
+    backgroundColor: 'rgba(224, 188, 58, 0.72)',
   },
   beatNum: {
-    ...typography.bodyStrong,
-    color: colors.mist,
-    fontSize: 18,
+    fontFamily: 'Noto Serif KR, Batang, Georgia, serif',
+    color: colors.cream,
+    fontSize: 28,
+    fontWeight: '700',
   },
   beatNumActive: {
-    color: colors.cream,
+    color: colors.ink,
+  },
+  status: {
+    ...typography.caption,
+    marginBottom: 10,
+    textAlign: 'center',
+    lineHeight: 18,
+    color: colors.parchmentDim,
   },
   factorRow: {
     flexDirection: 'row',
     gap: 10,
-    marginBottom: 18,
+    marginBottom: 12,
     flexWrap: 'wrap',
     justifyContent: 'center',
   },
   factorBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(201, 162, 39, 0.4)',
-    backgroundColor: 'rgba(14, 21, 32, 0.6)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: 'rgba(201, 162, 39, 0.5)',
+    backgroundColor: 'rgba(30, 44, 68, 0.7)',
   },
   factorBtnText: {
     ...typography.caption,
     color: colors.brassBright,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
   levelTrack: {
     width: '100%',
-    height: 8,
-    borderRadius: 4,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: 'rgba(30, 44, 68, 0.8)',
     overflow: 'hidden',
+    marginTop: 4,
   },
   levelFill: {
     height: '100%',
