@@ -85,10 +85,10 @@ export function BeatDetectScreen({}: Props) {
     setTapCount(0);
   }, []);
 
-  /** 원 옆 −/+ 로 BPM 미세 조절 */
+  /** 원 옆 −/+ 로 BPM 1씩 조절 (정수만) */
   const nudgeBpm = useCallback((delta: number) => {
     setBpm((prev) => {
-      const base = prev > 0 ? prev : 90;
+      const base = prev > 0 ? Math.round(prev) : 90;
       return clampBpm(base + delta);
     });
     setActivePreset(null);
@@ -170,7 +170,10 @@ export function BeatDetectScreen({}: Props) {
       setBpm(0);
       setBeat(0);
       const handle = await startBeatDetector({
-        onBpm: (next) => setBpm((prev) => (Math.abs(prev - next) < 0.05 ? prev : next)),
+        onBpm: (next) => {
+          const rounded = Math.round(next);
+          setBpm((prev) => (prev === rounded ? prev : rounded));
+        },
         onOnset: (timeMs) => {
           const p = periodRef.current;
           if (p <= 0 || nextBeatAtRef.current <= 0) return;
@@ -198,10 +201,11 @@ export function BeatDetectScreen({}: Props) {
     }
   };
 
-  /** 전체화면 탭: 탭모드=템포 측정 / 자동모드=가이드 템포 */
+  /** 탭 템포 모드: 원을 탭해 BPM 측정 */
   const onScreenTap = () => {
+    if (mode !== 'tap') return;
+
     const now = performance.now();
-    // 오래된 탭 제거 (3초 이상 간격이면 리셋)
     const taps = tapTimesRef.current;
     if (taps.length && now - taps[taps.length - 1] > 3000) {
       tapTimesRef.current = [];
@@ -211,39 +215,20 @@ export function BeatDetectScreen({}: Props) {
     setTapCount(tapTimesRef.current.length);
 
     const tapped = bpmFromTapTimes(tapTimesRef.current);
-
-    if (mode === 'tap') {
-      if (tapped > 0) {
-        setBpm(tapped);
-        setActivePreset(null);
-      }
-      // 탭 즉시 비주얼 피드백
-      beatIndexRef.current = (beatIndexRef.current % 4) + 1;
-      flashBeat(beatIndexRef.current);
-      return;
-    }
-
-    // 자동 모드: 탭으로 가이드 템포 잠금
     if (tapped > 0) {
-      setGuideBpm(tapped);
-      handleRef.current?.setGuideBpm(tapped);
-      if (!listening) {
-        // 가이드만 잡고 BPM 표시 → 점멸 시작, 마이크는 버튼으로
-        setBpm(tapped);
-      }
+      setBpm(Math.round(tapped));
+      setActivePreset(null);
     }
+    beatIndexRef.current = (beatIndexRef.current % 4) + 1;
+    flashBeat(beatIndexRef.current);
   };
 
   const applyHalfDouble = (factor: 0.5 | 2) => {
     if (bpm <= 0) return;
-    const next = Math.round(bpm * factor * 10) / 10;
+    const next = clampBpm(Math.round(bpm) * factor);
     if (next < 40 || next > 220) return;
     setBpm(next);
-    if (mode === 'auto' && guideBpm > 0) {
-      const g = Math.round(guideBpm * factor * 10) / 10;
-      setGuideBpm(g);
-      handleRef.current?.setGuideBpm(g);
-    }
+    setActivePreset(null);
   };
 
   const switchMode = (next: Mode) => {
@@ -348,7 +333,7 @@ export function BeatDetectScreen({}: Props) {
             <Text style={[typography.body, styles.hint]}>
               {mode === 'auto'
                 ? '마이크가 BPM을 듣고 4박으로 점멸합니다.'
-                : '프리셋 또는 −/+ 로 BPM을 정하면 점멸합니다.'}
+                : '프리셋·원 탭·−/+ 로 BPM을 정하면 점멸합니다.'}
             </Text>
 
             {/* 대형 BPM + −/+ */}
@@ -361,17 +346,31 @@ export function BeatDetectScreen({}: Props) {
                 <Text style={styles.nudgeBtnText}>−</Text>
               </Pressable>
 
-              <Pressable onPress={onScreenTap} style={styles.tapTarget}>
-                <Animated.View
-                  style={[
-                    styles.pulseRing,
-                    { transform: [{ scale: pulseScale }] },
-                  ]}
-                >
-                  <Text style={styles.bpmLabel}>BPM</Text>
-                  <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
-                </Animated.View>
-              </Pressable>
+              {mode === 'tap' ? (
+                <Pressable onPress={onScreenTap} style={styles.tapTarget}>
+                  <Animated.View
+                    style={[
+                      styles.pulseRing,
+                      { transform: [{ scale: pulseScale }] },
+                    ]}
+                  >
+                    <Text style={styles.bpmLabel}>BPM</Text>
+                    <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
+                  </Animated.View>
+                </Pressable>
+              ) : (
+                <View style={styles.tapTarget}>
+                  <Animated.View
+                    style={[
+                      styles.pulseRing,
+                      { transform: [{ scale: pulseScale }] },
+                    ]}
+                  >
+                    <Text style={styles.bpmLabel}>BPM</Text>
+                    <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
+                  </Animated.View>
+                </View>
+              )}
 
               <Pressable
                 onPress={() => nudgeBpm(1)}
@@ -438,17 +437,6 @@ export function BeatDetectScreen({}: Props) {
               >
                 <Text style={styles.factorBtnText}>×2</Text>
               </Pressable>
-              {guideBpm > 0 ? (
-                <Pressable
-                  onPress={() => {
-                    setGuideBpm(0);
-                    handleRef.current?.setGuideBpm(0);
-                  }}
-                  style={styles.factorBtn}
-                >
-                  <Text style={styles.factorBtnText}>가이드 해제</Text>
-                </Pressable>
-              ) : null}
             </View>
 
             {mode === 'auto' ? (

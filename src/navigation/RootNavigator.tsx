@@ -53,7 +53,7 @@ export function RootNavigator() {
         <Stack.Screen
           name="BeatDetect"
           component={BeatDetectScreen}
-          options={{ title: 'BPM 탐지' }}
+          options={{ title: 'Tempo' }}
         />
         <Stack.Screen
           name="Playlist"
