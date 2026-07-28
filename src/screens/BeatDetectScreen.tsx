@@ -23,6 +23,7 @@ import { typography } from '../theme/typography';
 import type { RootStackParamList } from '../navigation/types';
 import {
   DEFAULT_TAP_BPM_PRESETS,
+  clampBpm,
   loadTapBpmPresets,
   parsePresetBpm,
   saveTapBpmPresets,
@@ -46,7 +47,7 @@ export function BeatDetectScreen({}: Props) {
   const [level, setLevel] = useState(0);
   const [tapCount, setTapCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // 탭 템포 프리셋 4칸 (localStorage 유지)
+  // 탭 템포 프리셋 2칸 (localStorage 유지)
   const [presets, setPresets] = useState<TapBpmPresets>([
     ...DEFAULT_TAP_BPM_PRESETS,
   ]);
@@ -115,6 +116,19 @@ export function BeatDetectScreen({}: Props) {
     tapTimesRef.current = [];
     setTapCount(0);
   }, [presets]);
+
+  /** 원 옆 −/+ 로 BPM 미세 조절 */
+  const nudgeBpm = useCallback((delta: number) => {
+    setBpm((prev) => {
+      const base = prev > 0 ? prev : 90;
+      const next = clampBpm(base + delta);
+      return next;
+    });
+    setActivePreset(null);
+    setError(null);
+    tapTimesRef.current = [];
+    setTapCount(0);
+  }, []);
 
   // BPM 락되면 자동 4박 점멸
   useEffect(() => {
@@ -393,37 +407,55 @@ export function BeatDetectScreen({}: Props) {
             <Text style={[typography.body, styles.hint]}>
               {mode === 'auto'
                 ? '마이크가 BPM을 듣고, 아래 원을 탭하면 가이드 템포로 잠급니다.\nBPM이 잡히면 자동으로 4박 점멸합니다.'
-                : '원을 박자에 맞춰 탭하세요.\n측정된 BPM으로 자동 점멸합니다.'}
+                : '원을 탭하거나 −/+ · 저장 BPM으로 점멸합니다.'}
             </Text>
 
-            {/* 대형 BPM + 탭 영역 (Live BPM 스타일 전체 탭의 핵심 존) */}
-            <Pressable onPress={onScreenTap} style={styles.tapTarget}>
-              <Animated.View
-                style={[
-                  styles.pulseRing,
-                  { transform: [{ scale: pulseScale }] },
-                ]}
+            {/* 대형 BPM + −/+ */}
+            <View style={styles.bpmRow}>
+              <Pressable
+                onPress={() => nudgeBpm(-1)}
+                style={styles.nudgeBtn}
+                hitSlop={8}
               >
-                <Text style={styles.bpmLabel}>BPM</Text>
-                <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
-                {driftLabel ? (
-                  <Text
-                    style={[
-                      styles.drift,
-                      drift > 0.3
-                        ? styles.driftUp
-                        : drift < -0.3
-                          ? styles.driftDown
-                          : styles.driftOk,
-                    ]}
-                  >
-                    {driftLabel}
-                  </Text>
-                ) : (
-                  <Text style={styles.driftPlaceholder}>탭</Text>
-                )}
-              </Animated.View>
-            </Pressable>
+                <Text style={styles.nudgeBtnText}>−</Text>
+              </Pressable>
+
+              <Pressable onPress={onScreenTap} style={styles.tapTarget}>
+                <Animated.View
+                  style={[
+                    styles.pulseRing,
+                    { transform: [{ scale: pulseScale }] },
+                  ]}
+                >
+                  <Text style={styles.bpmLabel}>BPM</Text>
+                  <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
+                  {driftLabel ? (
+                    <Text
+                      style={[
+                        styles.drift,
+                        drift > 0.3
+                          ? styles.driftUp
+                          : drift < -0.3
+                            ? styles.driftDown
+                            : styles.driftOk,
+                      ]}
+                    >
+                      {driftLabel}
+                    </Text>
+                  ) : (
+                    <Text style={styles.driftPlaceholder}>탭</Text>
+                  )}
+                </Animated.View>
+              </Pressable>
+
+              <Pressable
+                onPress={() => nudgeBpm(1)}
+                style={styles.nudgeBtn}
+                hitSlop={8}
+              >
+                <Text style={styles.nudgeBtnText}>+</Text>
+              </Pressable>
+            </View>
 
             <Text style={styles.status}>
               {mode === 'tap'
@@ -573,23 +605,46 @@ const styles = StyleSheet.create({
   hint: {
     marginTop: 4,
     textAlign: 'center',
-    marginBottom: 18,
-    fontSize: 14,
-    lineHeight: 20,
+    marginBottom: 12,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  bpmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  nudgeBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: 'rgba(201, 162, 39, 0.55)',
+    backgroundColor: 'rgba(30, 44, 68, 0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nudgeBtnText: {
+    color: colors.brassBright,
+    fontSize: 28,
+    fontWeight: '700',
+    lineHeight: 32,
+    marginTop: -2,
   },
   tapTarget: {
-    marginBottom: 12,
+    marginBottom: 0,
   },
   pulseRing: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 168,
+    height: 168,
+    borderRadius: 84,
     borderWidth: 2,
     borderColor: 'rgba(201, 162, 39, 0.45)',
     backgroundColor: 'rgba(30, 44, 68, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
   },
   bpmLabel: {
     ...typography.caption,
@@ -598,10 +653,10 @@ const styles = StyleSheet.create({
   },
   bpmValue: {
     fontFamily: 'Noto Serif KR, Batang, Georgia, serif',
-    fontSize: 64,
+    fontSize: 52,
     fontWeight: '700',
     color: colors.cream,
-    lineHeight: 72,
+    lineHeight: 60,
     marginTop: 2,
   },
   drift: {
@@ -718,11 +773,13 @@ const styles = StyleSheet.create({
   },
   presetRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 12,
     width: '100%',
+    justifyContent: 'center',
   },
   presetCell: {
     flex: 1,
+    maxWidth: 140,
     gap: 6,
   },
   presetInput: {
