@@ -22,6 +22,7 @@ import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import type { RootStackParamList } from '../navigation/types';
 import {
+  DEFAULT_TAP_BPM_PRESETS,
   loadTapBpmPresets,
   parsePresetBpm,
   saveTapBpmPresets,
@@ -46,7 +47,9 @@ export function BeatDetectScreen({}: Props) {
   const [tapCount, setTapCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   // 탭 템포 프리셋 4칸 (localStorage 유지)
-  const [presets, setPresets] = useState<TapBpmPresets>(['', '', '', '']);
+  const [presets, setPresets] = useState<TapBpmPresets>([
+    ...DEFAULT_TAP_BPM_PRESETS,
+  ]);
   const [activePreset, setActivePreset] = useState<number | null>(null);
 
   const handleRef = useRef<BeatDetectorHandle | null>(null);

@@ -7,7 +7,13 @@ const STORAGE_KEY = 'akboplay.tapBpmPresets.v1';
 
 export type TapBpmPresets = [string, string, string, string];
 
-const EMPTY: TapBpmPresets = ['', '', '', ''];
+/** 탭 템포 BPM 프리셋 기본값 */
+export const DEFAULT_TAP_BPM_PRESETS: TapBpmPresets = [
+  '90',
+  '100',
+  '110',
+  '120',
+];
 
 function getStorage(): Storage | null {
   try {
@@ -22,17 +28,22 @@ function getStorage(): Storage | null {
 
 export function loadTapBpmPresets(): TapBpmPresets {
   const storage = getStorage();
-  if (!storage) return [...EMPTY] as TapBpmPresets;
+  if (!storage) return [...DEFAULT_TAP_BPM_PRESETS] as TapBpmPresets;
   try {
     const raw = storage.getItem(STORAGE_KEY);
-    if (!raw) return [...EMPTY] as TapBpmPresets;
+    if (!raw) return [...DEFAULT_TAP_BPM_PRESETS] as TapBpmPresets;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length !== 4) {
-      return [...EMPTY] as TapBpmPresets;
+      return [...DEFAULT_TAP_BPM_PRESETS] as TapBpmPresets;
     }
-    return parsed.map((v) => String(v ?? '')) as TapBpmPresets;
+    const loaded = parsed.map((v) => String(v ?? '')) as TapBpmPresets;
+    // 전부 비어 있으면 기본값 사용 (이전 빈 저장분 보정)
+    if (loaded.every((v) => !String(v).trim())) {
+      return [...DEFAULT_TAP_BPM_PRESETS] as TapBpmPresets;
+    }
+    return loaded;
   } catch {
-    return [...EMPTY] as TapBpmPresets;
+    return [...DEFAULT_TAP_BPM_PRESETS] as TapBpmPresets;
   }
 }
 
