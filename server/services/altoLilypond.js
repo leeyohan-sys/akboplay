@@ -122,6 +122,16 @@ function looksLikeLilypond(code) {
   if (mdBullets >= 2) return false;
   if (/\*\*m\.\d+/i.test(body)) return false;
 
+  // Gemini 사고과정/영어 해설이 \relative 안에 섞인 경우 거부
+  const proseHits = (
+    body.match(
+      /\b(?:Wait|Look|Let's|Ah,|beats?|measure|chord|harmony|construct|where is)\b/gi,
+    ) || []
+  ).length;
+  if (proseHits >= 2) return false;
+  // 음표 줄에 영문 문장부호 잔여 ("(2 beats)" 등)
+  if (/\(\d+\s*beats?\)/i.test(body)) return false;
+
   // \relative / \new Staff / << >> 중 하나는 반드시 있어야 함
   // (맨몸 음표만 있는 \version+\header 는 렌더 시 NOTENAME_PITCH 오류)
   const hasStructure =
@@ -130,6 +140,23 @@ function looksLikeLilypond(code) {
     (/\\score\b/.test(c) && /<<[\s\S]*>>/.test(c));
 
   if (!hasStructure) return false;
+
+  // 실제 음표가 충분히 있어야 함 (구조만 있고 해설만 있는 응답 거부)
+  const noteHits = (body.match(/\b[a-g](?:is|es)?[,']*\d/gi) || []).length;
+  if (noteHits < 8) return false;
+
+  // 알토 성부 흔적 (변수/스태프/가사 라벨)
+  const hasAlto =
+    /\balto\s*=/i.test(c) ||
+    /\\new\s+Staff\s*=\s*"alto"/i.test(c) ||
+    /instrumentName\s*=\s*"Alto"/i.test(c) ||
+    (/\bmelody\s*=/i.test(c) && /\balto\b/i.test(c));
+  if (!hasAlto && noteHits < 40) {
+    // 단일 스태프만이고 음표도 적으면 미완성으로 간주
+    if (!/<<[\s\S]*\\new\s+Staff[\s\S]*\\new\s+Staff/i.test(c)) {
+      return false;
+    }
+  }
 
   const hits = [
     /\\version\b/,
