@@ -98,10 +98,9 @@ export function BeatDetectScreen({}: Props) {
     setTapCount(0);
   }, []);
 
-  // BPM 락되면 자동 4박 점멸
+  // BPM이 잡히면(프리셋/−/+/탭/자동감지) 해당 주기로 4박 점멸
   useEffect(() => {
-    const active = (mode === 'auto' && listening) || mode === 'tap';
-    if (!active || bpm <= 0) {
+    if (bpm <= 0) {
       nextBeatAtRef.current = 0;
       periodRef.current = 0;
       return;
@@ -136,7 +135,7 @@ export function BeatDetectScreen({}: Props) {
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [mode, listening, bpm]);
+  }, [bpm]);
 
   const stopAuto = useCallback(() => {
     handleRef.current?.stop();
@@ -412,8 +411,8 @@ export function BeatDetectScreen({}: Props) {
                 ? bpm > 0
                   ? activePreset != null
                     ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸 중`
-                    : `탭 ${tapCount}회 · ${formatBpm(bpm)} BPM 점멸`
-                  : '박자에 맞춰 원을 탭하거나, 아래 저장 BPM을 누르세요'
+                    : `${formatBpm(bpm)} BPM · 점멸 중`
+                  : '원을 탭하거나 프리셋 · −/+ 로 BPM을 정하세요'
                 : listening
                   ? bpm > 0
                     ? guideBpm > 0
