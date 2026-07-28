@@ -54,7 +54,7 @@ app.get('/api/health', (_req, res) => {
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
     lilypondConfigured: isLilypondAvailable(),
-    version: 'alto-ly-lyricmap-20260728',
+    version: 'alto-ly-labelstrip-20260728',
   });
 });
 

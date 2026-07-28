@@ -212,8 +212,25 @@ function sanitizeLilypond(code) {
         /\\(?:header|markup|lyricmode|addlyrics|lyrics)\b/i.test(trimmed) ||
         /^\s*(?:title|composer|poet|arranger|subtitle)\s*=/.test(trimmed);
 
+      // "Melody:", "Alto (G#m):", "nm7 (G#m C#m):" 같은 성부/코드 라벨만 있고
+      // 뒤에 음표가 없는 줄 → 주석 (\\ 로 시작하면 실제 명령이므로 건드리지 않음)
+      if (
+        !/\\/.test(trimmed) &&
+        /^[A-Za-z][\w#♯♭]*(?:\s*\([^)]*\))?\s*:\s*$/.test(trimmed)
+      ) {
+        return `% ${trimmed}`;
+      }
+
       // 인라인 볼드 제거
       let out = line.replace(/\*\*/g, '');
+
+      // "Melody: gis'8 ..." / "Alto (G#m): e'8 ..." → 라벨 제거, 음표만 남김
+      // (라벨 자체엔 음표 패턴이 없고, 콜론 뒤가 실제 음표/쉼표/명령으로 시작할 때만)
+      out = out.replace(
+        /^([ \t]*)([A-Za-z][\w#♯♭]*)(\s*\([^)]*\))?\s*:\s*(?=[a-gA-GR\\<])/,
+        (full, indent, label) =>
+          /\b[a-g](?:is|es)?[,']*\d/i.test(label) ? full : indent,
+      );
       // "m.9 (1st Ending: E B): <음표…>" → 음표만 남김
       out = out.replace(
         /^([ \t]*)m\.\d+\b(?:\s*\([^)]*\))?\s*:\s*/i,
@@ -510,6 +527,7 @@ ${extra}
 11) "m.9", "1st Ending", "2nd Ending" 같은 마디·엔딩 라벨을 코드 줄에 절대 쓰지 말 것.
 12) 마크다운 금지: *, -, **, "#", "Alto:", "Melody:" 목록/설명 금지. 음표는 반드시 \\relative { } 또는 \\new Staff { } 안에만.
 13) 가사·음표 매핑 금지. "품* -> d8", "\\"으로\\" -> cis2" 같은 형식을 쓰지 말 것. 가사는 \\lyricmode / \\addlyrics 만 사용.
+14) 성부/코드 라벨 금지. "Melody:", "Alto (G#m):", "nm7 (G#m C#m):" 같은 텍스트를 음표 줄에 절대 쓰지 말 것. 성부는 오직 melody = \\relative { } / alto = \\relative { } 변수로만 구분.
 
 LilyPond 소스만:`;
 }

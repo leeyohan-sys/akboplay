@@ -169,4 +169,22 @@ assert(/cis''2\s*~\s*cis''4/.test(fixedLyric), 'notes after quoted lyric kept');
 assert(looksLikeLilypond(fixedLyric), 'lyric-map repaired still valid');
 assert(/title = "보혈을_지나_1_E_"/.test(fixedLyric), 'header hangul preserved');
 
+// 성부/코드 라벨 (Melody:, Alto (G#m):, nm7 (G#m C#m):) 제거
+const voiceLabels = `\\version "2.24.0"
+\\header { title = "보혈을_지나_1_E_" tagline = ##f }
+\\relative c' {
+e'8. fis'16
+nm7 (G#m C#m):
+Melody: gis'8. fis'16 gis'8. a'16 cis''4 ~ cis''8. b'16
+Alto (G#m): e'8. dis'16 e'8. fis'16
+Alto (C#m): e'4 ~ e'8. dis'16
+}`;
+const fixedLabels = sanitizeLilypond(voiceLabels);
+assert(!/Melody/.test(fixedLabels), 'Melody label removed');
+assert(!/Alto\s*\(/.test(fixedLabels), 'Alto (chord) label removed');
+assert(!/^nm7/m.test(fixedLabels), 'orphan chord-only label commented out');
+assert(/gis'8\.\s+fis'16\s+gis'8\.\s+a'16/.test(fixedLabels), 'melody notes kept');
+assert(/e'8\.\s+dis'16\s+e'8\.\s+fis'16/.test(fixedLabels), 'alto notes kept');
+assert(looksLikeLilypond(repairLilypond(voiceLabels, 'x.png')), 'voice-label repaired still valid');
+
 console.log('ok: alto parse/repair smoke tests passed');
