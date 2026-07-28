@@ -14,7 +14,6 @@ import {
   bpmFromTapTimes,
   isBeatDetectorSupported,
   startBeatDetector,
-  tempoDrift,
   type BeatDetectorHandle,
 } from '../services/beatDetector';
 import { colors } from '../theme/colors';
@@ -246,13 +245,6 @@ export function BeatDetectScreen({}: Props) {
       handleRef.current?.setGuideBpm(g);
     }
   };
-
-  const drift =
-    guideBpm > 0 && bpm > 0 ? tempoDrift(bpm, guideBpm) : 0;
-  const driftLabel =
-    guideBpm > 0 && bpm > 0
-      ? `${drift > 0 ? '+' : ''}${drift.toFixed(1)}`
-      : null;
 
   const switchMode = (next: Mode) => {
     resetAll();
