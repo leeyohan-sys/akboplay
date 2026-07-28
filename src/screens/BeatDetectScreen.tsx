@@ -5,7 +5,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -21,14 +20,7 @@ import {
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import type { RootStackParamList } from '../navigation/types';
-import {
-  DEFAULT_TAP_BPM_PRESETS,
-  clampBpm,
-  loadTapBpmPresets,
-  parsePresetBpm,
-  saveTapBpmPresets,
-  type TapBpmPresets,
-} from '../utils/tapBpmPresets';
+import { TAP_BPM_PRESETS, clampBpm } from '../utils/tapBpmPresets';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'BeatDetect'>;
 type Mode = 'auto' | 'tap';
@@ -47,10 +39,6 @@ export function BeatDetectScreen({}: Props) {
   const [level, setLevel] = useState(0);
   const [tapCount, setTapCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // 탭 템포 프리셋 2칸 (localStorage 유지)
-  const [presets, setPresets] = useState<TapBpmPresets>([
-    ...DEFAULT_TAP_BPM_PRESETS,
-  ]);
   const [activePreset, setActivePreset] = useState<number | null>(null);
 
   const handleRef = useRef<BeatDetectorHandle | null>(null);
@@ -87,42 +75,22 @@ export function BeatDetectScreen({}: Props) {
   const flashBeatRef = useRef(flashBeat);
   flashBeatRef.current = flashBeat;
 
-  // 저장된 프리셋 로드
-  useEffect(() => {
-    setPresets(loadTapBpmPresets());
-  }, []);
-
-  const updatePreset = useCallback((index: number, text: string) => {
-    // 숫자·소수점만 허용
-    const cleaned = text.replace(/[^0-9.]/g, '');
-    setPresets((prev) => {
-      const next: TapBpmPresets = [...prev] as TapBpmPresets;
-      next[index] = cleaned;
-      saveTapBpmPresets(next);
-      return next;
-    });
-  }, []);
-
   /** 프리셋 BPM 눌러 점멸 시작 */
   const applyPresetBpm = useCallback((index: number) => {
-    const n = parsePresetBpm(presets[index]);
-    if (n <= 0) {
-      setError('40~240 사이 BPM을 입력해 주세요.');
-      return;
-    }
+    const n = TAP_BPM_PRESETS[index];
+    if (!n) return;
     setError(null);
     setActivePreset(index);
     setBpm(n);
     tapTimesRef.current = [];
     setTapCount(0);
-  }, [presets]);
+  }, []);
 
   /** 원 옆 −/+ 로 BPM 미세 조절 */
   const nudgeBpm = useCallback((delta: number) => {
     setBpm((prev) => {
       const base = prev > 0 ? prev : 90;
-      const next = clampBpm(base + delta);
-      return next;
+      return clampBpm(base + delta);
     });
     setActivePreset(null);
     setError(null);
@@ -321,47 +289,29 @@ export function BeatDetectScreen({}: Props) {
             ) : (
               <View style={styles.tapFooter}>
                 <Text style={styles.presetHint}>
-                  BPM 저장 · 숫자를 누르면 그 템포로 점멸
+                  프리셋을 누르면 그 템포로 점멸
                 </Text>
                 <View style={styles.presetRow}>
-                  {presets.map((value, index) => {
-                    const valid = parsePresetBpm(value) > 0;
-                    const active = activePreset === index && bpm > 0;
+                  {TAP_BPM_PRESETS.map((value, index) => {
+                    const active = activePreset === index && bpm === value;
                     return (
-                      <View key={index} style={styles.presetCell}>
-                        <TextInput
-                          value={value}
-                          onChangeText={(t) => updatePreset(index, t)}
-                          placeholder={`BPM${index + 1}`}
-                          placeholderTextColor={colors.mist}
-                          keyboardType="decimal-pad"
-                          returnKeyType="done"
-                          onSubmitEditing={() => applyPresetBpm(index)}
+                      <Pressable
+                        key={value}
+                        onPress={() => applyPresetBpm(index)}
+                        style={[
+                          styles.presetBtn,
+                          active && styles.presetBtnActive,
+                        ]}
+                      >
+                        <Text
                           style={[
-                            styles.presetInput,
-                            active && styles.presetInputActive,
-                          ]}
-                          maxLength={5}
-                        />
-                        <Pressable
-                          onPress={() => applyPresetBpm(index)}
-                          disabled={!valid}
-                          style={[
-                            styles.presetApply,
-                            active && styles.presetApplyActive,
-                            !valid && styles.presetApplyDisabled,
+                            styles.presetBtnText,
+                            active && styles.presetBtnTextActive,
                           ]}
                         >
-                          <Text
-                            style={[
-                              styles.presetApplyText,
-                              active && styles.presetApplyTextActive,
-                            ]}
-                          >
-                            {valid ? value : '—'}
-                          </Text>
-                        </Pressable>
-                      </View>
+                          {value}
+                        </Text>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -461,7 +411,7 @@ export function BeatDetectScreen({}: Props) {
               {mode === 'tap'
                 ? bpm > 0
                   ? activePreset != null
-                    ? `프리셋 ${activePreset + 1} · ${formatBpm(bpm)} BPM 점멸`
+                    ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸 중`
                     : `탭 ${tapCount}회 · ${formatBpm(bpm)} BPM 점멸`
                   : '박자에 맞춰 원을 탭하거나, 아래 저장 BPM을 누르세요'
                 : listening
@@ -773,53 +723,31 @@ const styles = StyleSheet.create({
   },
   presetRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
     width: '100%',
     justifyContent: 'center',
   },
-  presetCell: {
+  presetBtn: {
     flex: 1,
-    maxWidth: 140,
-    gap: 6,
-  },
-  presetInput: {
-    borderWidth: 1,
-    borderColor: 'rgba(201, 162, 39, 0.35)',
-    borderRadius: 8,
-    backgroundColor: 'rgba(30, 44, 68, 0.7)',
-    color: colors.cream,
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '700',
-    paddingVertical: Platform.OS === 'web' ? 10 : 8,
-    paddingHorizontal: 4,
-    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
-  },
-  presetInputActive: {
-    borderColor: colors.brassBright,
-  },
-  presetApply: {
-    borderRadius: 8,
-    borderWidth: 1,
+    maxWidth: 88,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
     borderColor: 'rgba(201, 162, 39, 0.45)',
-    backgroundColor: 'rgba(201, 162, 39, 0.18)',
-    paddingVertical: 10,
+    backgroundColor: 'rgba(201, 162, 39, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  presetApplyActive: {
-    backgroundColor: 'rgba(224, 188, 58, 0.45)',
+  presetBtnActive: {
+    backgroundColor: 'rgba(224, 188, 58, 0.5)',
     borderColor: colors.brassBright,
   },
-  presetApplyDisabled: {
-    opacity: 0.4,
-  },
-  presetApplyText: {
+  presetBtnText: {
     ...typography.bodyStrong,
     color: colors.brassBright,
-    fontSize: 15,
+    fontSize: 18,
   },
-  presetApplyTextActive: {
+  presetBtnTextActive: {
     color: colors.cream,
   },
 });
