@@ -1,15 +1,10 @@
 /**
- * 마이크 입력으로 비트(onset)를 추적하고 BPM을 안정적으로 추정합니다.
- * Web Audio API 기반 (웹 / Expo Web)
- *
- * - 간격 중앙값 → 절반/배수 후보 점수화
- * - 체감 템포 대역(약 70~120) 가중
- * - 연속 일치 시에만 BPM 확정 (깜빡임 방지)
- * - 점멸은 UI 쪽 BPM 타이머가 담당, 여기는 onset으로 위상만 맞춤
+ * 마이크 비트 탐지 + 탭 템포 유틸
+ * Live BPM(com.kottov.pulse) 스타일: 자동감지 / 가이드 / 탭템포
  */
 
 export type BeatDetectorCallbacks = {
-  /** 안정화된 BPM이 바뀔 때 */
+  /** 안정화된 BPM (소수 1자리) */
   onBpm?: (bpm: number) => void;
   /** 에너지 onset (메트로놈 위상 동기화용) */
   onOnset?: (timeMs: number, bpm: number) => void;
@@ -19,6 +14,9 @@ export type BeatDetectorCallbacks = {
 
 export type BeatDetectorHandle = {
   stop: () => void;
+  /** 가이드 템포 설정 (0이면 해제). 자동감지 초점을 고정 */
+  setGuideBpm: (bpm: number) => void;
+  getGuideBpm: () => number;
 };
 
 function median(values: number[]): number {
@@ -30,24 +28,25 @@ function median(values: number[]): number {
     : sorted[mid];
 }
 
-/** 간격들이 해당 BPM 격자에 얼마나 맞는지 점수 (높을수록 좋음) */
+function roundBpm(bpm: number): number {
+  return Math.round(bpm * 10) / 10;
+}
+
+/** 간격들이 해당 BPM 격자에 얼마나 맞는지 점수 */
 function scoreBpmCandidate(intervalsMs: number[], bpm: number): number {
   if (bpm <= 0 || intervalsMs.length === 0) return -Infinity;
   const period = 60000 / bpm;
   let score = 0;
   for (const iv of intervalsMs) {
-    // 1박·2박·1/2박 배수와의 오차
     const multiples = [0.5, 1, 2, 3, 4];
     let bestErr = Infinity;
     for (const m of multiples) {
       const err = Math.abs(iv - period * m) / (period * m);
       if (err < bestErr) bestErr = err;
     }
-    // 12% 이내면 가점, 멀수록 감점
     if (bestErr < 0.12) score += 1 - bestErr / 0.12;
     else score -= 0.35;
   }
-  // 체감 BPM 대역 가중 (너무 빠르거나 느린 후보는 감점)
   if (bpm >= 70 && bpm <= 120) score += 0.55;
   else if (bpm >= 60 && bpm <= 140) score += 0.2;
   else if (bpm > 160 || bpm < 55) score -= 0.4;
@@ -55,9 +54,13 @@ function scoreBpmCandidate(intervalsMs: number[], bpm: number): number {
 }
 
 /**
- * 원시 간격 → 절반/배수 보정된 BPM
+ * 원시 간격 → 절반/배수·가이드 보정 BPM (소수 1자리)
  */
-export function stabilizeBpm(intervalsMs: number[], previousBpm = 0): number {
+export function stabilizeBpm(
+  intervalsMs: number[],
+  previousBpm = 0,
+  guideBpm = 0,
+): number {
   if (intervalsMs.length < 2) return previousBpm || 0;
   const med = median(intervalsMs);
   if (med <= 0) return previousBpm || 0;
@@ -65,36 +68,45 @@ export function stabilizeBpm(intervalsMs: number[], previousBpm = 0): number {
   const raw = 60000 / med;
   const candidates = new Set<number>();
   for (const factor of [0.5, 1, 2]) {
-    const b = Math.round(raw * factor);
+    const b = roundBpm(raw * factor);
     if (b >= 50 && b <= 180) candidates.add(b);
   }
-  // 이전 BPM 근처도 후보에 넣어 흔들림 완화
   if (previousBpm >= 50 && previousBpm <= 180) {
-    candidates.add(previousBpm);
-    candidates.add(Math.round(previousBpm / 2));
-    candidates.add(previousBpm * 2);
+    candidates.add(roundBpm(previousBpm));
+    candidates.add(roundBpm(previousBpm / 2));
+    candidates.add(roundBpm(previousBpm * 2));
+  }
+  if (guideBpm >= 50 && guideBpm <= 180) {
+    candidates.add(roundBpm(guideBpm));
+    candidates.add(roundBpm(guideBpm / 2));
+    candidates.add(roundBpm(guideBpm * 2));
   }
 
-  let best = Math.round(raw);
+  let best = roundBpm(raw);
   let bestScore = -Infinity;
   for (const bpm of candidates) {
     if (bpm < 50 || bpm > 180) continue;
     let s = scoreBpmCandidate(intervalsMs, bpm);
-    // 이전 값과 비슷하면 가점 (잦은 점프 억제)
     if (previousBpm > 0) {
       const rel = Math.abs(bpm - previousBpm) / previousBpm;
       if (rel < 0.04) s += 0.45;
       else if (rel < 0.08) s += 0.15;
-      // 정확히 절반/배수면 이전과 동일 템포로 간주해 유지 쪽으로
       if (
         Math.abs(bpm * 2 - previousBpm) <= 2 ||
         Math.abs(bpm - previousBpm * 2) <= 2
       ) {
-        // 새 후보가 체감 대역이면 전환, 아니면 이전 유지 유도
         if (!(bpm >= 70 && bpm <= 120) && previousBpm >= 70 && previousBpm <= 120) {
           s -= 0.6;
         }
       }
+    }
+    // 가이드 템포 근처 강력 가중 (Live BPM Guided Auto-Detect)
+    if (guideBpm > 0) {
+      const gRel = Math.abs(bpm - guideBpm) / guideBpm;
+      if (gRel < 0.03) s += 1.4;
+      else if (gRel < 0.06) s += 0.7;
+      else if (gRel < 0.1) s += 0.25;
+      else s -= 0.5;
     }
     if (s > bestScore) {
       bestScore = s;
@@ -104,7 +116,25 @@ export function stabilizeBpm(intervalsMs: number[], previousBpm = 0): number {
   return best;
 }
 
-/** 브라우저에서 마이크 beat detector 지원 여부 */
+/** 탭 시각 배열 → BPM (소수 1자리). 최근 탭만 사용 */
+export function bpmFromTapTimes(tapTimesMs: number[]): number {
+  if (tapTimesMs.length < 2) return 0;
+  const recent = tapTimesMs.slice(-9);
+  const intervals: number[] = [];
+  for (let i = 1; i < recent.length; i++) {
+    const iv = recent[i] - recent[i - 1];
+    if (iv >= 200 && iv <= 2000) intervals.push(iv);
+  }
+  if (intervals.length === 0) return 0;
+  return roundBpm(60000 / median(intervals));
+}
+
+/** 목표 대비 드리프트 (현재 - 목표) */
+export function tempoDrift(currentBpm: number, targetBpm: number): number {
+  if (currentBpm <= 0 || targetBpm <= 0) return 0;
+  return roundBpm(currentBpm - targetBpm);
+}
+
 export function isBeatDetectorSupported(): boolean {
   if (typeof window === 'undefined') return false;
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -119,7 +149,6 @@ export function isBeatDetectorSupported(): boolean {
 
 /**
  * 마이크를 열고 실시간으로 onset·BPM을 추적합니다.
- * @returns stop() 핸들
  */
 export async function startBeatDetector(
   callbacks: BeatDetectorCallbacks = {},
@@ -159,6 +188,7 @@ export async function startBeatDetector(
   const intervals: number[] = [];
   let lastOnsetMs = 0;
   let bpm = 0;
+  let guideBpm = 0;
   let pendingBpm = 0;
   let pendingCount = 0;
   let energyHistory: number[] = [];
@@ -167,25 +197,24 @@ export async function startBeatDetector(
 
   const publishBpm = (next: number) => {
     if (next <= 0) return;
-    // 같은 후보가 연속일 때 확정 (첫 BPM은 1회만으로도 시작)
-    if (next === pendingBpm) {
+    const rounded = roundBpm(next);
+    if (rounded === pendingBpm) {
       pendingCount += 1;
     } else {
-      pendingBpm = next;
+      pendingBpm = rounded;
       pendingCount = 1;
     }
     const need = bpm > 0 ? 2 : 1;
     if (pendingCount < need) return;
-    if (bpm === next) return;
-    // 급변 완화
+    if (Math.abs(bpm - rounded) < 0.05) return;
     if (bpm > 0) {
-      const rel = Math.abs(next - bpm) / bpm;
-      if (rel < 0.05) return;
+      const rel = Math.abs(rounded - bpm) / bpm;
+      if (rel < 0.015) return;
       const isHalfOrDouble =
-        Math.abs(next * 2 - bpm) <= 3 || Math.abs(next - bpm * 2) <= 3;
-      if (!isHalfOrDouble && rel < 0.12 && pendingCount < 3) return;
+        Math.abs(rounded * 2 - bpm) <= 3 || Math.abs(rounded - bpm * 2) <= 3;
+      if (!isHalfOrDouble && rel < 0.08 && pendingCount < 3) return;
     }
-    bpm = next;
+    bpm = rounded;
     callbacks.onBpm?.(bpm);
   };
 
@@ -207,7 +236,6 @@ export async function startBeatDetector(
     if (stopped) return;
     analyser.getByteFrequencyData(freq);
 
-    // 저~중역(킥·스네어) 에너지 위주로 onset 감지
     let sum = 0;
     const lo = 1;
     const hi = Math.min(48, freq.length);
@@ -222,8 +250,8 @@ export async function startBeatDetector(
     const threshold = Math.max(28, avg * 1.28);
 
     const now = performance.now();
-    // 확정 BPM 기준 refractory (더블 트리거 방지)
-    const refractory = bpm > 0 ? Math.max(220, 60000 / bpm / 2.4) : 260;
+    const refBpm = guideBpm > 0 ? guideBpm : bpm;
+    const refractory = refBpm > 0 ? Math.max(220, 60000 / refBpm / 2.4) : 260;
     const rising =
       energyHistory.length >= 3 &&
       energy > energyHistory[energyHistory.length - 2] &&
@@ -233,13 +261,11 @@ export async function startBeatDetector(
     if (energy > threshold && rising && now - lastOnsetMs > refractory) {
       if (lastOnsetMs > 0) {
         const interval = now - lastOnsetMs;
-        // 40~200 BPM에 해당하는 간격만 수집
         if (interval >= 300 && interval <= 1500) {
           intervals.push(interval);
           if (intervals.length > 16) intervals.shift();
           if (intervals.length >= 2) {
-            const stabilized = stabilizeBpm(intervals, bpm);
-            publishBpm(stabilized);
+            publishBpm(stabilizeBpm(intervals, bpm, guideBpm));
           }
         }
       }
@@ -252,5 +278,11 @@ export async function startBeatDetector(
 
   raf = requestAnimationFrame(tick);
 
-  return { stop };
+  return {
+    stop,
+    setGuideBpm: (g: number) => {
+      guideBpm = g > 0 ? roundBpm(g) : 0;
+    },
+    getGuideBpm: () => guideBpm,
+  };
 }
