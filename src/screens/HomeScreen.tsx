@@ -205,12 +205,14 @@ export function HomeScreen({ navigation }: Props) {
             variant="ghost"
             disabled={loading}
           />
+          {/* 알토 악보 만들기: 안정화 전까지 임시로 숨김
           <PrimaryButton
             label="알토 악보 만들기"
             onPress={() => navigation.navigate('AltoScore')}
             variant="ghost"
             disabled={loading}
           />
+          */}
         </View>
       }
     >
