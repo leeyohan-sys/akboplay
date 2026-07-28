@@ -193,12 +193,14 @@ export function HomeScreen({ navigation }: Props) {
             onPress={pickPdf}
             loading={loading}
           />
+          {/* 데모로 미리보기: 임시로 숨김
           <PrimaryButton
             label="데모로 미리보기"
             onPress={tryDemo}
             variant="ghost"
             disabled={loading}
           />
+          */}
           <PrimaryButton
             label="BPM 탐지"
             onPress={() => navigation.navigate('BeatDetect')}
