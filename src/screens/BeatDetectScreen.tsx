@@ -29,30 +29,19 @@ export function BeatDetectScreen({}: Props) {
   const handleRef = useRef<BeatDetectorHandle | null>(null);
   const flash = useRef(new Animated.Value(0)).current;
 
-  // 메트로놈 상태 (BPM 타이머)
-  const bpmRef = useRef(0);
-  const beatIndexRef = useRef(0);
+  // onset 위상 보정용
   const nextBeatAtRef = useRef(0);
-  const metroRafRef = useRef(0);
-  const listeningRef = useRef(false);
-
-  const stopMetronome = useCallback(() => {
-    if (metroRafRef.current) {
-      cancelAnimationFrame(metroRafRef.current);
-      metroRafRef.current = 0;
-    }
-    beatIndexRef.current = 0;
-    nextBeatAtRef.current = 0;
-  }, []);
+  const periodRef = useRef(0);
 
   const flashBeat = useCallback(
     (beatIndex: number) => {
       setBeat(beatIndex);
-      flash.setValue(beatIndex === 1 ? 0.92 : 0.72);
+      flash.stopAnimation();
+      flash.setValue(beatIndex === 1 ? 0.95 : 0.75);
       Animated.timing(flash, {
         toValue: 0,
-        duration: beatIndex === 1 ? 240 : 150,
-        useNativeDriver: Platform.OS !== 'web',
+        duration: beatIndex === 1 ? 260 : 160,
+        useNativeDriver: false,
       }).start();
     },
     [flash],
@@ -61,45 +50,62 @@ export function BeatDetectScreen({}: Props) {
   const flashBeatRef = useRef(flashBeat);
   flashBeatRef.current = flashBeat;
 
-  // BPM 기준 4박 타이머 (rAF로 드리프트 최소화)
-  const runMetronome = useCallback(() => {
+  /**
+   * BPM이 잡히면(>0) 자동으로 그 주기에 맞춰 4박 점멸.
+   * listening + bpm 상태에만 의존해 확실히 시작/재시작한다.
+   */
+  useEffect(() => {
+    if (!listening || bpm <= 0) {
+      nextBeatAtRef.current = 0;
+      periodRef.current = 0;
+      return;
+    }
+
+    const period = 60000 / bpm;
+    periodRef.current = period;
+    let beatIndex = 0;
+    let cancelled = false;
+    let rafId = 0;
+
+    // BPM 확정 즉시 1박부터 점멸 시작
+    beatIndex = 1;
+    flashBeatRef.current(1);
+    nextBeatAtRef.current = performance.now() + period;
+
     const tick = (now: number) => {
-      if (!listeningRef.current) return;
-      const currentBpm = bpmRef.current;
-      if (currentBpm > 0) {
-        const period = 60000 / currentBpm;
-        if (nextBeatAtRef.current <= 0) {
-          nextBeatAtRef.current = now;
-        }
-        // 탭이 밀리면 따라잡기 (최대 2박)
-        let guard = 0;
-        while (now >= nextBeatAtRef.current && guard < 2) {
-          beatIndexRef.current = (beatIndexRef.current % 4) + 1;
-          flashBeatRef.current(beatIndexRef.current);
-          nextBeatAtRef.current += period;
-          guard += 1;
-        }
-        // 너무 뒤처지면 위상 리셋
-        if (now - nextBeatAtRef.current > period * 2) {
-          nextBeatAtRef.current = now + period;
+      if (cancelled) return;
+      const p = periodRef.current || period;
+      // 밀린 박은 최대 1개만 따라잡아 연속 깜빡임 폭주 방지
+      if (now >= nextBeatAtRef.current) {
+        beatIndex = (beatIndex % 4) + 1;
+        flashBeatRef.current(beatIndex);
+        // 한 박만 진행. 너무 밀렸으면 지금 기준으로 재정렬
+        if (now - nextBeatAtRef.current > p) {
+          nextBeatAtRef.current = now + p;
+        } else {
+          nextBeatAtRef.current += p;
         }
       }
-      metroRafRef.current = requestAnimationFrame(tick);
+      rafId = requestAnimationFrame(tick);
     };
-    if (metroRafRef.current) cancelAnimationFrame(metroRafRef.current);
-    metroRafRef.current = requestAnimationFrame(tick);
-  }, []);
+
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [listening, bpm]);
 
   const stop = useCallback(() => {
-    listeningRef.current = false;
     handleRef.current?.stop();
     handleRef.current = null;
-    stopMetronome();
     setListening(false);
     setBeat(0);
     setLevel(0);
-    bpmRef.current = 0;
-  }, [stopMetronome]);
+    setBpm(0);
+    nextBeatAtRef.current = 0;
+    periodRef.current = 0;
+  }, []);
 
   useEffect(() => () => stop(), [stop]);
 
@@ -113,58 +119,28 @@ export function BeatDetectScreen({}: Props) {
     }
     try {
       stop();
-      setBpm(0);
-      setBeat(0);
-      bpmRef.current = 0;
-      beatIndexRef.current = 0;
-      nextBeatAtRef.current = 0;
-
       const handle = await startBeatDetector({
         onBpm: (next) => {
-          const prev = bpmRef.current;
-          bpmRef.current = next;
-          setBpm(next);
-          // 첫 BPM 확정 시 메트로놈 시작 / BPM 변경 시 주기만 갱신(위상 유지)
-          if (prev <= 0 && next > 0) {
-            nextBeatAtRef.current = performance.now();
-            beatIndexRef.current = 0;
-            runMetronome();
-          } else if (prev > 0 && next > 0 && next !== prev) {
-            // 남은 대기 시간을 새 주기에 비례 스케일
-            const now = performance.now();
-            const oldPeriod = 60000 / prev;
-            const newPeriod = 60000 / next;
-            const remain = Math.max(0, nextBeatAtRef.current - now);
-            const ratio = remain / oldPeriod;
-            nextBeatAtRef.current = now + ratio * newPeriod;
-          }
+          // BPM이 바뀌면 useEffect가 자동으로 점멸 주기를 재시작
+          setBpm((prev) => (prev === next ? prev : next));
         },
-        // onset으로 메트로놈 위상 동기화
+        // 마이크 onset으로 다음 박 시각만 살짝 맞춤 (점멸 자체는 BPM 타이머)
         onOnset: (timeMs) => {
-          if (bpmRef.current <= 0) return;
-          const period = 60000 / bpmRef.current;
-          if (nextBeatAtRef.current <= 0) {
-            nextBeatAtRef.current = timeMs + period;
-            return;
-          }
-          // 직전 예정 박과의 오차
-          const prevBeatAt = nextBeatAtRef.current - period;
+          const p = periodRef.current;
+          if (p <= 0 || nextBeatAtRef.current <= 0) return;
+          const prevBeatAt = nextBeatAtRef.current - p;
           let err = timeMs - prevBeatAt;
-          // -period/2 ~ +period/2 로 정규화
-          err = ((err % period) + period) % period;
-          if (err > period / 2) err -= period;
-          // ±35% 이내면 onset 시각을 박으로 채택하고 다음 박 재설정
-          if (Math.abs(err) < period * 0.35) {
-            nextBeatAtRef.current = timeMs + period;
+          err = ((err % p) + p) % p;
+          if (err > p / 2) err -= p;
+          if (Math.abs(err) < p * 0.35) {
+            nextBeatAtRef.current = timeMs + p;
           }
         },
         onLevel: (lv) => setLevel(lv),
         onError: (msg) => setError(msg),
       });
       handleRef.current = handle;
-      listeningRef.current = true;
       setListening(true);
-      runMetronome();
     } catch (e) {
       const msg =
         e instanceof Error
@@ -172,13 +148,12 @@ export function BeatDetectScreen({}: Props) {
           : '마이크를 열 수 없습니다. 권한을 확인해 주세요.';
       setError(msg);
       setListening(false);
-      listeningRef.current = false;
     }
   };
 
   return (
     <View style={styles.root}>
-      {/* 전체화면 점멸 (본문·푸터·세이프영역 포함) */}
+      {/* 전체화면 점멸 */}
       <Animated.View
         pointerEvents="none"
         style={[
@@ -187,8 +162,8 @@ export function BeatDetectScreen({}: Props) {
             opacity: flash,
             backgroundColor:
               beat === 1
-                ? 'rgba(224, 188, 58, 0.62)'
-                : 'rgba(201, 162, 39, 0.38)',
+                ? 'rgba(224, 188, 58, 0.7)'
+                : 'rgba(201, 162, 39, 0.45)',
           },
         ]}
       />
@@ -208,8 +183,8 @@ export function BeatDetectScreen({}: Props) {
           <Text style={styles.eyebrow}>BEAT DETECTOR · 4/4</Text>
           <Text style={typography.h1}>BPM 탐지</Text>
           <Text style={[typography.body, styles.hint]}>
-            음악 BPM을 안정적으로 측정하고{'\n'}
-            그 박자에 맞춰 화면이 4박으로 깜박입니다.
+            BPM이 측정되면 그 박자에 맞춰{'\n'}
+            화면이 자동으로 4박 점멸합니다.
           </Text>
 
           <Text style={styles.bpmLabel}>BPM</Text>
@@ -217,12 +192,11 @@ export function BeatDetectScreen({}: Props) {
           <Text style={styles.status}>
             {listening
               ? bpm > 0
-                ? 'BPM 락 · 4박 점멸 중'
-                : '듣는 중… BPM 안정화 중'
+                ? `${bpm} BPM · 자동 점멸 중`
+                : '듣는 중… BPM 측정 중'
               : '대기 중'}
           </Text>
 
-          {/* 4비트 인디케이터 */}
           <View style={styles.beats}>
             {[1, 2, 3, 4].map((n) => {
               const active = beat === n;
@@ -245,7 +219,6 @@ export function BeatDetectScreen({}: Props) {
             })}
           </View>
 
-          {/* 입력 레벨 */}
           <View style={styles.levelTrack}>
             <View
               style={[
@@ -269,7 +242,7 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web'
       ? ({
           height: '100%' as unknown as number,
-          position: 'relative' as unknown as 'absolute',
+          position: 'relative' as unknown as 'relative',
         } as object)
       : null),
   },

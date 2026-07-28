@@ -167,20 +167,20 @@ export async function startBeatDetector(
 
   const publishBpm = (next: number) => {
     if (next <= 0) return;
-    // 같은 후보가 2회 연속일 때만 확정 (안정화)
+    // 같은 후보가 연속일 때 확정 (첫 BPM은 1회만으로도 시작)
     if (next === pendingBpm) {
       pendingCount += 1;
     } else {
       pendingBpm = next;
       pendingCount = 1;
     }
-    if (pendingCount < 2 && bpm > 0) return;
+    const need = bpm > 0 ? 2 : 1;
+    if (pendingCount < need) return;
     if (bpm === next) return;
-    // 급변 완화: 기존 BPM과 8% 이상 차이날 때만, 또는 첫 확정
+    // 급변 완화
     if (bpm > 0) {
       const rel = Math.abs(next - bpm) / bpm;
       if (rel < 0.05) return;
-      // 절반/배수 전환은 허용
       const isHalfOrDouble =
         Math.abs(next * 2 - bpm) <= 3 || Math.abs(next - bpm * 2) <= 3;
       if (!isHalfOrDouble && rel < 0.12 && pendingCount < 3) return;
@@ -237,7 +237,7 @@ export async function startBeatDetector(
         if (interval >= 300 && interval <= 1500) {
           intervals.push(interval);
           if (intervals.length > 16) intervals.shift();
-          if (intervals.length >= 3) {
+          if (intervals.length >= 2) {
             const stabilized = stabilizeBpm(intervals, bpm);
             publishBpm(stabilized);
           }
