@@ -97,9 +97,11 @@ export function BeatDetectScreen({}: Props) {
     setTapCount(0);
   }, []);
 
-  // BPM이 잡히면(프리셋/−/+/탭/자동감지) 해당 주기로 4박 점멸
+  // 탭 템포: BPM만 있으면 점멸 / 자동감지: 듣는 중에만 점멸
   useEffect(() => {
-    if (bpm <= 0) {
+    const shouldFlash =
+      bpm > 0 && (mode === 'tap' || (mode === 'auto' && listening));
+    if (!shouldFlash) {
       nextBeatAtRef.current = 0;
       periodRef.current = 0;
       return;
@@ -134,14 +136,16 @@ export function BeatDetectScreen({}: Props) {
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [bpm]);
+  }, [bpm, mode, listening]);
 
   const stopAuto = useCallback(() => {
     handleRef.current?.stop();
     handleRef.current = null;
     setListening(false);
     setLevel(0);
-  }, []);
+    setBeat(0);
+    flash.setValue(0);
+  }, [flash]);
 
   const resetAll = useCallback(() => {
     stopAuto();
