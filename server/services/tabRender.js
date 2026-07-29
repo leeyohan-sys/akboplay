@@ -35,7 +35,6 @@ function buildTabSvg(score) {
   const topMargin = 88;
   const rightPad = 28;
   const measuresPerSystem = 4;
-
   const systems = [];
   for (let i = 0; i < measures.length; i += measuresPerSystem) {
     systems.push(measures.slice(i, i + measuresPerSystem));
@@ -48,9 +47,12 @@ function buildTabSvg(score) {
   const measureW = measureInnerW + measurePad * 2;
   const contentW =
     leftGutter + measuresPerSystem * measureW + rightPad;
-  const width = Math.max(640, contentW);
-  const height =
-    topMargin + systems.length * (staffH + systemGap) + 40;
+  const width = Math.max(720, contentW);
+  // 시스템(줄)이 많아도 잘리지 않게 높이 확보
+  const height = Math.max(
+    320,
+    topMargin + systems.length * (staffH + systemGap) + 48,
+  );
 
   const parts = [];
   parts.push(
@@ -75,7 +77,7 @@ function buildTabSvg(score) {
     `<text x="${width / 2}" y="60" text-anchor="middle" font-family="Arial, 'Noto Sans KR', sans-serif" font-size="13" fill="#5A6575">${meta}</text>`,
   );
   parts.push(
-    `<text x="${width / 2}" y="78" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#8A93A0">TAB</text>`,
+    `<text x="${width / 2}" y="78" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#8A93A0">TAB · ${measures.length} measures</text>`,
   );
 
   systems.forEach((sysMeasures, sysIdx) => {

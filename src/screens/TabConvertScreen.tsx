@@ -150,6 +150,9 @@ export function TabConvertScreen({}: Props) {
                 result.key ? `Key ${result.key}` : null,
                 result.tempo ? `♩=${result.tempo}` : null,
                 result.timeSignature,
+                result.measureCount != null
+                  ? `${result.measureCount}마디`
+                  : null,
                 result.method === 'demo' ? '데모' : 'AI 변환',
               ]
                 .filter(Boolean)

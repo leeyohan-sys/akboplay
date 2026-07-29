@@ -46,6 +46,8 @@ export type TabConvertResult = {
   key?: string;
   tempo?: number;
   timeSignature?: string;
+  /** 인식된 마디 수 */
+  measureCount?: number;
   asciiTab?: string;
   svg?: string;
   pngBase64: string;

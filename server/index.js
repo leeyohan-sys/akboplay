@@ -169,7 +169,7 @@ app.post('/api/playlist/auto', async (req, res) => {
 
 /** 악보 이미지/PDF → 기타 TAB (PNG·PDF) */
 app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
-  res.setTimeout(120000);
+  res.setTimeout(160000);
   try {
     const fileName = decodeUploadFileName(
       req.body?.fileName || req.file?.originalname || 'score.png',
@@ -189,7 +189,7 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
       new Promise((_, reject) =>
         setTimeout(
           () => reject(new Error('탭 변환 시간이 초과되었습니다.')),
-          110000,
+          150000,
         ),
       ),
     ]);
