@@ -30,7 +30,8 @@ function formatBpm(bpm: number): string {
 }
 
 export function BeatDetectScreen({}: Props) {
-  const [mode, setMode] = useState<Mode>('auto');
+  // 탭 템포를 기본·우선 모드로
+  const [mode, setMode] = useState<Mode>('tap');
   const [listening, setListening] = useState(false);
   const [bpm, setBpm] = useState(0);
   const [guideBpm, setGuideBpm] = useState(0);
@@ -257,68 +258,12 @@ export function BeatDetectScreen({}: Props) {
         ]}
       />
 
-      <ScreenShell
-        footer={
-          <View style={styles.actions}>
-            {mode === 'auto' ? (
-              listening ? (
-                <PrimaryButton label="탐지 중지" onPress={stopAuto} variant="danger" />
-              ) : (
-                <PrimaryButton label="마이크 자동 감지 시작" onPress={startAuto} />
-              )
-            ) : (
-              <View style={styles.tapFooter}>
-                <Text style={styles.presetHint}>
-                  프리셋을 누르면 그 템포로 점멸
-                </Text>
-                <View style={styles.presetRow}>
-                  {TAP_BPM_PRESETS.map((value, index) => {
-                    const active = activePreset === index && bpm === value;
-                    return (
-                      <Pressable
-                        key={value}
-                        onPress={() => applyPresetBpm(index)}
-                        style={[
-                          styles.presetBtn,
-                          active && styles.presetBtnActive,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.presetBtnText,
-                            active && styles.presetBtnTextActive,
-                          ]}
-                        >
-                          {value}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <PrimaryButton label="탭 초기화" onPress={resetAll} variant="ghost" />
-              </View>
-            )}
-          </View>
-        }
-      >
+      {/* fixed 푸터 없이 본문에 모두 배치 → 잘림 방지 */}
+      <ScreenShell>
         <View style={styles.body}>
-            <Text style={styles.eyebrow}>LIVE BPM · 4/4</Text>
-
-            {/* 모드 전환 */}
+          <View style={styles.topBlock}>
+            {/* 탭 템포 → 자동 감지 순 */}
             <View style={styles.modeRow}>
-              <Pressable
-                onPress={() => switchMode('auto')}
-                style={[styles.modeChip, mode === 'auto' && styles.modeChipOn]}
-              >
-                <Text
-                  style={[
-                    styles.modeChipText,
-                    mode === 'auto' && styles.modeChipTextOn,
-                  ]}
-                >
-                  자동 감지
-                </Text>
-              </Pressable>
               <Pressable
                 onPress={() => switchMode('tap')}
                 style={[styles.modeChip, mode === 'tap' && styles.modeChipOn]}
@@ -332,15 +277,22 @@ export function BeatDetectScreen({}: Props) {
                   탭 템포
                 </Text>
               </Pressable>
+              <Pressable
+                onPress={() => switchMode('auto')}
+                style={[styles.modeChip, mode === 'auto' && styles.modeChipOn]}
+              >
+                <Text
+                  style={[
+                    styles.modeChipText,
+                    mode === 'auto' && styles.modeChipTextOn,
+                  ]}
+                >
+                  자동 감지
+                </Text>
+              </Pressable>
             </View>
 
-            <Text style={[typography.body, styles.hint]}>
-              {mode === 'auto'
-                ? '마이크가 BPM을 듣고 4박으로 점멸합니다.'
-                : '프리셋·원 탭·−/+ 로 BPM을 정하면 점멸합니다.'}
-            </Text>
-
-            {/* 대형 BPM + −/+ */}
+            {/* BPM + −/+ */}
             <View style={styles.bpmRow}>
               <Pressable
                 onPress={() => nudgeBpm(-1)}
@@ -355,11 +307,13 @@ export function BeatDetectScreen({}: Props) {
                   <Animated.View
                     style={[
                       styles.pulseRing,
+                      styles.pulseRingTap,
                       { transform: [{ scale: pulseScale }] },
                     ]}
                   >
                     <Text style={styles.bpmLabel}>BPM</Text>
                     <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
+                    <Text style={styles.tapBadge}>탭</Text>
                   </Animated.View>
                 </Pressable>
               ) : (
@@ -385,8 +339,7 @@ export function BeatDetectScreen({}: Props) {
               </Pressable>
             </View>
 
-            {/* 4박 인디케이터 — 크게, 원 바로 아래 */}
-            <Text style={styles.beatsLabel}>4 BEATS</Text>
+            {/* 4박 — 작은 고정 크기 */}
             <View style={styles.beats}>
               {[1, 2, 3, 4].map((n) => {
                 const active = beat === n;
@@ -409,25 +362,22 @@ export function BeatDetectScreen({}: Props) {
               })}
             </View>
 
-            <Text style={styles.status}>
+            <Text style={styles.status} numberOfLines={1}>
               {mode === 'tap'
                 ? bpm > 0
                   ? activePreset != null
-                    ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸 중`
-                    : `${formatBpm(bpm)} BPM · 점멸 중`
-                  : '프리셋 또는 −/+ 로 BPM을 정하세요'
+                    ? `프리셋 ${TAP_BPM_PRESETS[activePreset]} · 점멸`
+                    : tapCount > 0
+                      ? `${formatBpm(bpm)} · 탭 ${tapCount}`
+                      : `${formatBpm(bpm)} BPM · 점멸`
+                  : '원을 탭하거나 프리셋으로 BPM 설정'
                 : listening
                   ? bpm > 0
-                    ? guideBpm > 0
-                      ? `가이드 ${formatBpm(guideBpm)} · 자동 점멸`
-                      : `${formatBpm(bpm)} BPM · 자동 점멸`
-                    : '듣는 중… BPM 측정 중'
-                  : guideBpm > 0
-                    ? `가이드 ${formatBpm(guideBpm)} · 시작을 누르세요`
-                    : '대기 중 · 시작 버튼을 누르세요'}
+                    ? `${formatBpm(bpm)} BPM · 점멸 중`
+                    : '듣는 중…'
+                  : '시작 버튼을 누르세요'}
             </Text>
 
-            {/* ×½ / ×2 */}
             <View style={styles.factorRow}>
               <Pressable
                 onPress={() => applyHalfDouble(0.5)}
@@ -443,7 +393,32 @@ export function BeatDetectScreen({}: Props) {
               </Pressable>
             </View>
 
-            {mode === 'auto' ? (
+            {mode === 'tap' ? (
+              <View style={styles.presetRow}>
+                {TAP_BPM_PRESETS.map((value, index) => {
+                  const active = activePreset === index && bpm === value;
+                  return (
+                    <Pressable
+                      key={value}
+                      onPress={() => applyPresetBpm(index)}
+                      style={[
+                        styles.presetBtn,
+                        active && styles.presetBtnActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.presetBtnText,
+                          active && styles.presetBtnTextActive,
+                        ]}
+                      >
+                        {value}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : (
               <View style={styles.levelTrack}>
                 <View
                   style={[
@@ -454,10 +429,34 @@ export function BeatDetectScreen({}: Props) {
                   ]}
                 />
               </View>
-            ) : null}
+            )}
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
           </View>
+
+          <View style={styles.ctaBlock}>
+            {mode === 'auto' ? (
+              listening ? (
+                <PrimaryButton
+                  label="탐지 중지"
+                  onPress={stopAuto}
+                  variant="danger"
+                />
+              ) : (
+                <PrimaryButton
+                  label="마이크 자동 감지 시작"
+                  onPress={startAuto}
+                />
+              )
+            ) : (
+              <PrimaryButton
+                label="탭 초기화"
+                onPress={resetAll}
+                variant="ghost"
+              />
+            )}
+          </View>
+        </View>
       </ScreenShell>
     </View>
   );
@@ -477,19 +476,23 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: Platform.OS === 'web' ? 16 : 8,
     alignItems: 'center',
+    justifyContent: 'space-between',
     maxWidth: 560,
     width: '100%',
     alignSelf: 'center',
   },
-  eyebrow: {
-    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
-    fontSize: 11,
-    letterSpacing: 2.2,
-    color: colors.brass,
-    marginBottom: 8,
+  topBlock: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  ctaBlock: {
+    width: '100%',
+    marginTop: 12,
+    paddingBottom: 4,
   },
   modeRow: {
     flexDirection: 'row',
@@ -497,9 +500,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   modeChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(201, 162, 39, 0.35)',
     backgroundColor: 'rgba(30, 44, 68, 0.45)',
@@ -517,24 +520,17 @@ const styles = StyleSheet.create({
     color: colors.cream,
     fontWeight: '700',
   },
-  hint: {
-    marginTop: 2,
-    textAlign: 'center',
-    marginBottom: 10,
-    fontSize: 13,
-    lineHeight: 18,
-  },
   bpmRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    marginBottom: 14,
+    gap: 10,
+    marginBottom: 8,
   },
   nudgeBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     borderWidth: 1.5,
     borderColor: 'rgba(201, 162, 39, 0.55)',
     backgroundColor: 'rgba(30, 44, 68, 0.75)',
@@ -545,172 +541,140 @@ const styles = StyleSheet.create({
     color: colors.brassBright,
     fontSize: 28,
     fontWeight: '700',
-    lineHeight: 32,
+    lineHeight: 30,
     marginTop: -2,
   },
   tapTarget: {
     marginBottom: 0,
   },
   pulseRing: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    borderWidth: 2,
+    width: 188,
+    height: 188,
+    borderRadius: 94,
+    borderWidth: 2.5,
     borderColor: 'rgba(201, 162, 39, 0.45)',
     backgroundColor: 'rgba(30, 44, 68, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pulseRingTap: {
+    borderColor: colors.brassBright,
+    borderStyle: 'dashed',
+  },
   bpmLabel: {
     ...typography.caption,
-    letterSpacing: 3,
+    letterSpacing: 2.5,
     color: colors.brass,
+    fontSize: 13,
   },
   bpmValue: {
     fontFamily: 'Noto Serif KR, Batang, Georgia, serif',
-    fontSize: 48,
+    fontSize: 58,
     fontWeight: '700',
     color: colors.cream,
-    lineHeight: 56,
-    marginTop: 2,
+    lineHeight: 64,
   },
-  drift: {
-    fontFamily: 'Noto Sans KR, Apple SD Gothic Neo, Malgun Gothic, sans-serif',
-    fontSize: 16,
+  tapBadge: {
+    marginTop: 2,
+    fontSize: 15,
     fontWeight: '700',
-    marginTop: 2,
-  },
-  driftUp: { color: '#E08A6A' },
-  driftDown: { color: '#6AB0E0' },
-  driftOk: { color: colors.success },
-  driftPlaceholder: {
-    fontSize: 14,
-    marginTop: 2,
-    color: colors.mist,
-    letterSpacing: 2,
-  },
-  beatsLabel: {
-    ...typography.caption,
-    letterSpacing: 2,
-    color: colors.brass,
-    marginBottom: 8,
-    fontSize: 11,
+    letterSpacing: 1.5,
+    color: colors.brassBright,
   },
   beats: {
     flexDirection: 'row',
-    width: '100%',
-    maxWidth: 360,
-    gap: 10,
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    gap: 6,
+    marginBottom: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   beatDot: {
-    flex: 1,
-    aspectRatio: 1,
-    maxHeight: 78,
-    borderRadius: 16,
-    borderWidth: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
     borderColor: colors.brass,
-    backgroundColor: 'rgba(201, 162, 39, 0.12)',
+    backgroundColor: 'rgba(201, 162, 39, 0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   beatDotActive: {
     borderColor: colors.brassBright,
-    backgroundColor: 'rgba(224, 188, 58, 0.45)',
-    transform: [{ scale: 1.04 }],
+    backgroundColor: 'rgba(224, 188, 58, 0.5)',
   },
   beatDotOne: {
-    backgroundColor: 'rgba(224, 188, 58, 0.72)',
+    backgroundColor: 'rgba(224, 188, 58, 0.75)',
   },
   beatNum: {
     fontFamily: 'Noto Serif KR, Batang, Georgia, serif',
     color: colors.cream,
-    fontSize: 28,
+    fontSize: 13,
     fontWeight: '700',
+    lineHeight: 16,
   },
   beatNumActive: {
     color: colors.ink,
   },
   status: {
     ...typography.caption,
-    marginBottom: 10,
+    marginBottom: 6,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 16,
+    fontSize: 12,
     color: colors.parchmentDim,
   },
   factorRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
     justifyContent: 'center',
   },
   factorBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
     borderColor: 'rgba(201, 162, 39, 0.5)',
     backgroundColor: 'rgba(30, 44, 68, 0.7)',
   },
   factorBtnText: {
     ...typography.caption,
     color: colors.brassBright,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
   },
   levelTrack: {
-    width: '100%',
-    height: 6,
-    borderRadius: 3,
+    width: '80%',
+    height: 4,
+    borderRadius: 2,
     backgroundColor: 'rgba(30, 44, 68, 0.8)',
     overflow: 'hidden',
-    marginTop: 4,
+    marginTop: 2,
   },
   levelFill: {
     height: '100%',
     backgroundColor: colors.brass,
   },
-  levelHint: {
-    ...typography.caption,
-    marginTop: 8,
-    marginBottom: 12,
-  },
   error: {
     ...typography.caption,
     color: '#F0B0A4',
     textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 18,
-  },
-  actions: {
-    gap: 10,
-    maxWidth: 560,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  tapFooter: {
-    gap: 10,
-    width: '100%',
-  },
-  presetHint: {
-    ...typography.caption,
-    textAlign: 'center',
-    color: colors.mist,
-    fontSize: 11,
+    marginTop: 6,
+    lineHeight: 16,
+    fontSize: 12,
   },
   presetRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
     width: '100%',
+    maxWidth: 300,
     justifyContent: 'center',
   },
   presetBtn: {
     flex: 1,
-    maxWidth: 88,
-    paddingVertical: 14,
-    borderRadius: 10,
+    maxWidth: 68,
+    paddingVertical: 9,
+    borderRadius: 8,
     borderWidth: 1.5,
     borderColor: 'rgba(201, 162, 39, 0.45)',
     backgroundColor: 'rgba(201, 162, 39, 0.16)',
@@ -724,7 +688,7 @@ const styles = StyleSheet.create({
   presetBtnText: {
     ...typography.bodyStrong,
     color: colors.brassBright,
-    fontSize: 18,
+    fontSize: 15,
   },
   presetBtnTextActive: {
     color: colors.cream,

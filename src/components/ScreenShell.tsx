@@ -28,10 +28,11 @@ export function ScreenShell({ children, footer, style }: Props) {
       const visibleH = vv?.height ?? layoutH;
       const offsetTop = vv?.offsetTop ?? 0;
       const bottomInset = Math.max(0, Math.round(layoutH - (visibleH + offsetTop)));
+      // 모바일 브라우저 하단 UI 여유만 최소로 — 과도하면 본문(1–4)을 가림
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       document.documentElement.style.setProperty(
         '--shell-footer-bottom',
-        `${Math.max(isMobile ? 48 : 0, bottomInset)}px`,
+        `${Math.max(isMobile ? 12 : 0, bottomInset)}px`,
       );
     };
 
@@ -101,14 +102,15 @@ const styles = StyleSheet.create({
   body: {
     flex: 1,
     minHeight: 0,
-    ...(Platform.OS === 'web' ? ({ overflow: 'hidden' } as ViewStyle) : null),
+    // 잘림 대신 스크롤 가능 (짧은 화면에서도 하단 CTA·박자 확인)
+    ...(Platform.OS === 'web' ? ({ overflow: 'auto' } as ViewStyle) : null),
   },
   footer: {
     flexShrink: 0,
     paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-    gap: 10,
+    paddingTop: 8,
+    paddingBottom: 10,
+    gap: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(232, 223, 200, 0.12)',
     backgroundColor: 'rgba(14, 21, 32, 0.98)',
@@ -121,7 +123,7 @@ const styles = StyleSheet.create({
       bottom: 0,
       zIndex: 1000,
       paddingBottom:
-        'max(20px, calc(env(safe-area-inset-bottom, 0px) + var(--shell-footer-bottom, 48px)))' as unknown as number,
+        'max(12px, calc(env(safe-area-inset-bottom, 0px) + var(--shell-footer-bottom, 24px)))' as unknown as number,
     } as ViewStyle,
     default: {},
   }) as ViewStyle,

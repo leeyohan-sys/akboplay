@@ -5,6 +5,7 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { SongsScreen } from '../screens/SongsScreen';
 import { PlaylistScreen } from '../screens/PlaylistScreen';
 import { BeatDetectScreen } from '../screens/BeatDetectScreen';
+import { TabConvertScreen } from '../screens/TabConvertScreen';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from './types';
 
@@ -54,6 +55,11 @@ export function RootNavigator() {
           name="BeatDetect"
           component={BeatDetectScreen}
           options={{ title: 'Tempo' }}
+        />
+        <Stack.Screen
+          name="TabConvert"
+          component={TabConvertScreen}
+          options={{ title: 'TAB 변환' }}
         />
         <Stack.Screen
           name="Playlist"

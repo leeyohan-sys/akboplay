@@ -1,6 +1,11 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import type { AnalyzeResult, MatchedSong, PlaylistResult } from '../types';
+import type {
+  AnalyzeResult,
+  MatchedSong,
+  PlaylistResult,
+  TabConvertResult,
+} from '../types';
 
 /** Android 에뮬레이터는 호스트 PC를 10.0.2.2로 접근 */
 function resolveApiBase(): string {
@@ -181,6 +186,43 @@ export function pickPdfFileWeb(): Promise<File | null> {
   });
 }
 
+/** 웹: 악보 이미지 또는 PDF 선택 (TAB 변환용) */
+export function pickScoreFileWeb(): Promise<File | null> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(null);
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*,application/pdf,.pdf,.png,.jpg,.jpeg,.webp';
+    input.style.display = 'none';
+    const cleanup = () => {
+      input.onchange = null;
+      input.remove();
+    };
+    input.onchange = () => {
+      const file = input.files?.[0] ?? null;
+      cleanup();
+      resolve(file);
+    };
+    window.addEventListener(
+      'focus',
+      () => {
+        setTimeout(() => {
+          if (!input.files?.length) {
+            cleanup();
+            resolve(null);
+          }
+        }, 600);
+      },
+      { once: true },
+    );
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
 export const api = {
   baseUrl: API_BASE,
 
@@ -268,4 +310,55 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+
+  /** 웹 File → 기타 탭 변환 */
+  convertToTabFile: async (file: File): Promise<TabConvertResult> => {
+    const form = new FormData();
+    const name = file.name || 'score.png';
+    form.append('fileName', name);
+    form.append('file', file, name);
+    return request<TabConvertResult>('/api/tab-convert', {
+      method: 'POST',
+      body: form,
+      timeoutMs: 120000,
+    });
+  },
+
+  /** 네이티브 URI → 기타 탭 변환 */
+  convertToTab: async (
+    uri: string,
+    fileName: string,
+    file?: File | Blob | null,
+    mimeType = 'image/png',
+  ): Promise<TabConvertResult> => {
+    const form = new FormData();
+    const name = fileName || 'score.png';
+    form.append('fileName', name);
+
+    if (Platform.OS === 'web') {
+      let blob: Blob;
+      if (file) {
+        blob = file;
+      } else {
+        blob = await blobFromUri(uri);
+      }
+      const upload =
+        typeof File !== 'undefined'
+          ? new File([blob], name, { type: blob.type || mimeType })
+          : blob;
+      form.append('file', upload, name);
+    } else {
+      form.append('file', {
+        uri,
+        name,
+        type: mimeType,
+      } as unknown as Blob);
+    }
+
+    return request<TabConvertResult>('/api/tab-convert', {
+      method: 'POST',
+      body: form,
+      timeoutMs: 120000,
+    });
+  },
 };

@@ -37,3 +37,22 @@ export type PlaylistResult = {
   title: string;
   videoCount: number;
 };
+
+/** 악보 → 기타 탭 변환 결과 */
+export type TabConvertResult = {
+  fileName: string;
+  title: string;
+  composer?: string;
+  key?: string;
+  tempo?: number;
+  timeSignature?: string;
+  asciiTab?: string;
+  svg?: string;
+  pngBase64: string;
+  pdfBase64?: string;
+  mimePng?: string;
+  mimePdf?: string;
+  method?: string;
+  note?: string;
+  model?: string;
+};

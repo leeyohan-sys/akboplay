@@ -14,6 +14,8 @@ const {
 } = require('./services/youtube');
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
 const { decodeUploadFileName } = require('./utils/fileName');
+const { convertScoreToTab } = require('./services/tabConvert');
+const { isConfigured: isGeminiConfigured } = require('./services/geminiClient');
 
 const app = express();
 const upload = multer({
@@ -47,8 +49,8 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
-    version: 'remove-alto-20260728',
+    geminiConfigured: isGeminiConfigured(),
+    version: 'tab-convert-20260729',
   });
 });
 
@@ -161,6 +163,49 @@ app.post('/api/playlist/auto', async (req, res) => {
     console.error('[playlist/auto]', err);
     return res.status(500).json({
       error: err.message || '자동 플레이리스트 생성에 실패했습니다.',
+    });
+  }
+});
+
+/** 악보 이미지/PDF → 기타 TAB (PNG·PDF) */
+app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
+  res.setTimeout(120000);
+  try {
+    const fileName = decodeUploadFileName(
+      req.body?.fileName || req.file?.originalname || 'score.png',
+    );
+    if (!req.file) {
+      return res.status(400).json({
+        error: '악보 이미지 또는 PDF 파일이 필요합니다.',
+      });
+    }
+
+    console.log(
+      `[tab-convert] ${fileName} (${req.file.size} bytes, ${req.file.mimetype})`,
+    );
+
+    const result = await Promise.race([
+      convertScoreToTab(req.file.buffer, fileName, req.file.mimetype),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('탭 변환 시간이 초과되었습니다.')),
+          110000,
+        ),
+      ),
+    ]);
+
+    return res.json({
+      fileName,
+      ...result,
+    });
+  } catch (err) {
+    console.error('[tab-convert]', err);
+    const msg = String(err.message || err);
+    if (err.code === 'RATE_LIMIT' || /요청이 많습니다|429/i.test(msg)) {
+      return res.status(429).json({ error: msg });
+    }
+    return res.status(500).json({
+      error: msg || '탭 변환에 실패했습니다.',
     });
   }
 });

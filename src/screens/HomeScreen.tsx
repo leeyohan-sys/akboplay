@@ -207,6 +207,12 @@ export function HomeScreen({ navigation }: Props) {
             variant="ghost"
             disabled={loading}
           />
+          <PrimaryButton
+            label="TAB 변환"
+            onPress={() => navigation.navigate('TabConvert')}
+            variant="ghost"
+            disabled={loading}
+          />
         </View>
       }
     >
