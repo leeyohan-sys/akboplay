@@ -665,14 +665,15 @@ const styles = StyleSheet.create({
   },
   presetRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     width: '100%',
-    maxWidth: 300,
+    maxWidth: 340,
     justifyContent: 'center',
   },
   presetBtn: {
-    flex: 1,
-    maxWidth: 68,
+    minWidth: 48,
+    paddingHorizontal: 10,
     paddingVertical: 9,
     borderRadius: 8,
     borderWidth: 1.5,
