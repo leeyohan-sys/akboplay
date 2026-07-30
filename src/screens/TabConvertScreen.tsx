@@ -53,18 +53,41 @@ export function TabConvertScreen({}: Props) {
     setLoading(true);
     if (force) setResult(null);
     try {
-      let out: TabConvertResult;
-      if (upload.kind === 'web-file' && upload.file) {
-        out = await api.convertToTabFile(upload.file, { force });
-      } else {
-        out = await api.convertToTab(
+      // 무료 Render 슬립 깨우기
+      try {
+        await api.wakeUp();
+      } catch {
+        // wake 실패해도 변환은 한 번 시도
+      }
+
+      const doConvert = async () => {
+        if (upload.kind === 'web-file' && upload.file) {
+          return api.convertToTabFile(upload.file, { force });
+        }
+        return api.convertToTab(
           upload.uri || '',
           upload.fileName,
           upload.nativeFile ?? null,
           upload.mimeType || 'image/png',
           { force },
         );
+      };
+
+      let out: TabConvertResult;
+      try {
+        out = await doConvert();
+      } catch (firstErr) {
+        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+        // 네트워크/슬립 오류면 한 번 재시도
+        if (/연결하지|시간|초과|Failed to fetch|network/i.test(msg)) {
+          await new Promise((r) => setTimeout(r, 3000));
+          await api.wakeUp().catch(() => undefined);
+          out = await doConvert();
+        } else {
+          throw firstErr;
+        }
       }
+
       if (force && out.cached) {
         setError(
           '서버가 아직 캐시 결과를 반환했습니다. 잠시 후 다시 시도해 주세요. (API 배포 중일 수 있음)',

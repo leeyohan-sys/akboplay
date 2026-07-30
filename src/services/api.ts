@@ -40,13 +40,13 @@ const API_BASE = resolveApiBase();
 function friendlyFetchError(e: unknown): Error {
   if (e instanceof Error && e.name === 'AbortError') {
     return new Error(
-      '요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요. (스캔 PDF는 인식에 시간이 걸릴 수 있습니다)',
+      '요청 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요. (무료 서버는 깨어나는 데 30~60초 걸릴 수 있습니다)',
     );
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (/failed to fetch|networkerror|load failed/i.test(msg)) {
     return new Error(
-      '서버에 연결하지 못했습니다. 네트워크를 확인하거나 잠시 후 다시 시도해 주세요.',
+      '서버에 연결하지 못했습니다. 무료 API가 잠들어 있거나 재배포 중일 수 있습니다. 10초 뒤 다시 시도해 주세요.',
     );
   }
   if (/502|503|504|bad gateway/i.test(msg)) {
@@ -227,9 +227,27 @@ export const api = {
   baseUrl: API_BASE,
 
   health: () =>
-    request<{ ok: boolean; youtubeConfigured: boolean }>('/api/health', {
-      timeoutMs: 60000,
+    request<{
+      ok: boolean;
+      youtubeConfigured: boolean;
+      geminiConfigured?: boolean;
+      version?: string;
+    }>('/api/health', {
+      timeoutMs: 90000,
     }),
+
+  /** Render 무료 플랜 슬립 깨우기 (변환 전 호출) */
+  wakeUp: async (): Promise<{ ok: boolean; version?: string }> => {
+    try {
+      const h = await api.health();
+      return { ok: Boolean(h?.ok), version: h?.version };
+    } catch {
+      // 한 번 더 시도
+      await new Promise((r) => setTimeout(r, 2500));
+      const h = await api.health();
+      return { ok: Boolean(h?.ok), version: h?.version };
+    }
+  },
 
   demo: () => request<AnalyzeResult>('/api/demo', { timeoutMs: 60000 }),
 
