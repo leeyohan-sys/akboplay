@@ -67,6 +67,7 @@ function buildTabSvg(score) {
   const meta = [
     score.composer ? escapeXml(score.composer) : '',
     score.key ? `Key ${escapeXml(score.key)}` : '',
+    score.positionLabel ? escapeXml(score.positionLabel) : '',
     score.tempo ? `♩=${Number(score.tempo)}` : '',
     score.timeSignature ? escapeXml(score.timeSignature) : '',
     'Standard Tuning',

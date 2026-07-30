@@ -48,6 +48,8 @@ export type TabConvertResult = {
   timeSignature?: string;
   /** 인식된 마디 수 */
   measureCount?: number;
+  /** 조성 포지션 (예: E · 9프렛 3현) */
+  positionLabel?: string;
   asciiTab?: string;
   svg?: string;
   pngBase64: string;

@@ -12,6 +12,11 @@ const {
   pngToPdf,
   demoScore,
 } = require('./tabRender');
+const {
+  remapScoreToKeyPosition,
+  positionPromptBlock,
+  getPositionForKey,
+} = require('./tabPositions');
 
 const cache = new Map();
 const CACHE_MAX = 12;
@@ -146,12 +151,27 @@ function normalizeScore(parsed) {
         ? m.notes
         : [];
     const events = eventsIn
-      .map((ev) => ({
-        string: Math.max(1, Math.min(6, Number(ev.string ?? ev.s) || 1)),
-        fret: Math.max(0, Math.min(24, Number(ev.fret ?? ev.f) || 0)),
-        beat: Math.max(0, Number(ev.beat ?? ev.b) || 0),
-      }))
-      .filter((ev) => Number.isFinite(ev.fret));
+      .map((ev) => {
+        const string = Number(ev.string ?? ev.s);
+        const fret = Number(ev.fret ?? ev.f);
+        const beat = Math.max(0, Number(ev.beat ?? ev.b) || 0);
+        const pitch = ev.pitch ?? ev.note ?? ev.n ?? ev.midi;
+        const out = { beat };
+        if (Number.isFinite(string) && string >= 1) {
+          out.string = Math.max(1, Math.min(6, string));
+        }
+        if (Number.isFinite(fret) && fret >= 0) {
+          out.fret = Math.max(0, Math.min(24, fret));
+        }
+        if (pitch != null && pitch !== '') out.pitch = pitch;
+        // string/fret 또는 pitch 중 하나는 있어야 함
+        if (out.string == null && out.pitch == null) return null;
+        if (out.fret == null && out.pitch == null) out.fret = 0;
+        if (out.string == null) out.string = 1;
+        if (out.fret == null) out.fret = 0;
+        return out;
+      })
+      .filter(Boolean);
     return { events };
   });
 
@@ -185,6 +205,7 @@ async function scoreToOutputs(score) {
     tempo: score.tempo || undefined,
     timeSignature: score.timeSignature,
     measureCount,
+    positionLabel: score.positionLabel || undefined,
     asciiTab,
     svg,
     pngBase64: png.toString('base64'),
@@ -200,7 +221,8 @@ async function scoreToOutputs(score) {
  * @param {string} [mime]
  */
 async function convertScoreToTab(buffer, fileName, mime) {
-  const hash = bufferHash(buffer) + ':v2-full';
+  // 포지션 운지 로직 변경 시 캐시 무효화
+  const hash = bufferHash(buffer) + ':v3-pos';
   const cached = cacheGet(hash);
   if (cached) {
     console.log('[tab] 캐시 히트');
@@ -209,7 +231,8 @@ async function convertScoreToTab(buffer, fileName, mime) {
 
   if (!isConfigured()) {
     console.warn('[tab] GEMINI_API_KEY 없음 → 데모 탭');
-    const out = await scoreToOutputs(demoScore());
+    const demo = remapScoreToKeyPosition(demoScore());
+    const out = await scoreToOutputs(demo);
     out.method = 'demo';
     out.note =
       'Gemini API 키가 없어 데모 탭을 표시합니다. 서버에 GEMINI_API_KEY를 설정하면 실제 악보를 변환합니다.';
@@ -221,25 +244,22 @@ async function convertScoreToTab(buffer, fileName, mime) {
     throw new Error('이미지/PDF를 읽지 못했습니다. 다른 파일을 시도해 주세요.');
   }
 
-  // 멜로디만·짧은 키로 토큰을 아껴 18~40마디까지 수용
-  const prompt = `당신은 기타 편곡가입니다. 첨부된 악보 이미지의 **모든 마디**를 기타 TAB JSON으로 변환하세요.
+  const prompt = `당신은 기타 편곡가입니다. 첨부된 악보 이미지의 **모든 마디** 멜로디를 읽고 JSON으로 주세요.
 파일: ${fileName || 'score'}
 
-필수:
-- 오선의 **멜로디(보컬 라인)** 만 TAB으로. 코드(E, A, B7 등 빨간 글씨)는 참고만 하고 화음 스택은 넣지 마세요.
-- 표준 튜닝. string: 1=고음 e … 6=저음 E.
-- beat: 마디 안 박(0부터). 8분음=0.5.
-- **마지막 마디·더블바까지 전부** 포함. 픽업(약박)이 있으면 첫 measures[0]에 넣으세요.
-- 마디 번호(1,4,7,11,15…)가 보이면 그 순서대로, 보통 15~24마디 분량입니다. **중간에 끊지 마세요.**
-- 1·2번 엔딩/도돌이표가 있어도 **악보에 적힌 마디를 순서대로** 모두 넣고, 반복 연주는 펼치지 마세요.
-- 쉼표 구간은 events를 비우거나 건너뛰세요. 없는 음을 만들지 마세요.
-- 최대 ${MAX_MEASURES}마디.
+${positionPromptBlock()}
 
-짧은 키만 사용 (토큰 절약):
-{"title":"곡명","composer":"","key":"E","tempo":72,"timeSignature":"4/4","measureCount":18,"measures":[{"events":[{"s":1,"f":0,"b":0},{"s":1,"f":2,"b":0.5}]}]}
-- s=string, f=fret, b=beat
-- measureCount에는 실제 넣은 마디 수를 적으세요.
-설명 없이 JSON만.`;
+필수:
+- 오선 **멜로디만**. 빨간 코드 심볼은 조성 파악 참고용.
+- key 필드는 반드시 악보 조성 (예: E, G, C, Am).
+- 각 음에 음높이 pitch n(예:"E4","G#4","C5")와 beat를 넣고, 가능하면 위 포지션의 s·f도 함께.
+- beat: 마디 안 박(0부터). 8분음=0.5.
+- **마지막 마디까지 전부**. 픽업은 measures[0]. 반복은 펼치지 말고 적힌 순서대로.
+- 최대 ${MAX_MEASURES}마디. 없는 음 창작 금지.
+
+JSON만:
+{"title":"곡명","composer":"","key":"E","tempo":72,"timeSignature":"4/4","measureCount":18,"measures":[{"events":[{"n":"B3","b":0,"s":3,"f":9},{"n":"E4","b":0.5,"s":2,"f":9}]}]}
+- n=pitch, b=beat, s=string(1=고음e), f=fret`;
 
   const parts = [
     { text: prompt },
@@ -278,13 +298,22 @@ async function convertScoreToTab(buffer, fileName, mime) {
     score.title = '변환 부분 실패 · 샘플 탭';
   }
 
+  // 조성 포지션으로 서버에서 최종 운지 확정
+  score = remapScoreToKeyPosition(score);
+  const pos = getPositionForKey(score.key);
+  console.log(
+    `[tab] 포지션 ${pos.label} · key=${score.key} · measures=${score.measures.length}`,
+  );
+
   const out = await scoreToOutputs(score);
   out.method = 'gemini';
   out.model = response.model;
   if (score.partial) {
-    out.note = `응답이 중간에 잘려 ${out.measureCount}마디만 복구했습니다. 다시 시도하면 더 많이 나올 수 있습니다.`;
+    out.note = `응답이 중간에 잘려 ${out.measureCount}마디만 복구 · ${pos.label}`;
   } else if (out.measureCount < 12) {
-    out.note = `${out.measureCount}마디만 인식되었습니다. 악보가 더 길면 다시 변환해 보세요.`;
+    out.note = `${out.measureCount}마디 인식 · ${pos.label}`;
+  } else {
+    out.note = pos.label;
   }
   console.log(
     `[tab] 완료 · measures=${out.measureCount} · model=${response.model}`,

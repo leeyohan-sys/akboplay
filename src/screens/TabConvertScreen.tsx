@@ -148,6 +148,7 @@ export function TabConvertScreen({}: Props) {
             <Text style={styles.resultMeta}>
               {[
                 result.key ? `Key ${result.key}` : null,
+                result.positionLabel || null,
                 result.tempo ? `♩=${result.tempo}` : null,
                 result.timeSignature,
                 result.measureCount != null
