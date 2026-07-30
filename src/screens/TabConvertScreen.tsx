@@ -65,6 +65,11 @@ export function TabConvertScreen({}: Props) {
           { force },
         );
       }
+      if (force && out.cached) {
+        setError(
+          '서버가 아직 캐시 결과를 반환했습니다. 잠시 후 다시 시도해 주세요. (API 배포 중일 수 있음)',
+        );
+      }
       setResult(out);
     } catch (e) {
       setError(e instanceof Error ? e.message : '탭 변환에 실패했습니다.');
@@ -204,6 +209,7 @@ export function TabConvertScreen({}: Props) {
                   ? `${result.measureCount}마디`
                   : null,
                 result.method === 'demo' ? '데모' : 'AI 변환',
+                result.forceApplied ? '재변환' : null,
                 result.cached ? '캐시' : null,
               ]
                 .filter(Boolean)

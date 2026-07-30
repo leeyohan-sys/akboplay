@@ -50,7 +50,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'tab-convert-20260729',
+    version: 'tab-force-v5-20260730',
   });
 });
 
@@ -184,10 +184,17 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
       `[tab-convert] ${fileName} (${req.file.size} bytes, ${req.file.mimetype})`,
     );
 
+    const forceRaw =
+      req.query?.force ?? req.body?.force ?? req.headers['x-tab-force'];
     const force =
-      req.body?.force === '1' ||
-      req.body?.force === 'true' ||
-      req.body?.force === true;
+      forceRaw === true ||
+      forceRaw === 1 ||
+      String(forceRaw || '').toLowerCase() === '1' ||
+      String(forceRaw || '').toLowerCase() === 'true';
+
+    console.log(
+      `[tab-convert] ${fileName} force=${force} bodyForce=${req.body?.force} queryForce=${req.query?.force}`,
+    );
 
     const result = await Promise.race([
       convertScoreToTab(req.file.buffer, fileName, req.file.mimetype, {
@@ -204,6 +211,8 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
     return res.json({
       fileName,
       ...result,
+      // 클라이언트가 강제 재변환 성공 여부 확인용
+      forceApplied: force,
     });
   } catch (err) {
     console.error('[tab-convert]', err);

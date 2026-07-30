@@ -59,4 +59,6 @@ export type TabConvertResult = {
   method?: string;
   note?: string;
   cached?: boolean;
+  /** 서버가 force 재변환을 적용했는지 */
+  forceApplied?: boolean;
 };

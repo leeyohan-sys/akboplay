@@ -215,31 +215,64 @@ async function scoreToOutputs(score) {
   };
 }
 
+function cacheDelete(key) {
+  cache.delete(key);
+}
+
+async function finalizeScore(score, { model, method, fromCache }) {
+  const remapped = remapScoreToKeyPosition(score);
+  const pos = getPositionForKey(remapped.key);
+  console.log(
+    `[tab] 포지션 ${pos.label} · key=${remapped.key} · measures=${remapped.measures.length}${fromCache ? ' · fromCache' : ''}`,
+  );
+
+  const out = await scoreToOutputs(remapped);
+  out.method = method || 'gemini';
+  if (model) out.model = model;
+  out.cached = Boolean(fromCache);
+  if (remapped.partial) {
+    out.note = `응답이 중간에 잘려 ${out.measureCount}마디만 복구 · ${pos.label}`;
+  } else if (out.measureCount < 12) {
+    out.note = `${out.measureCount}마디 인식 · ${pos.label}`;
+  } else {
+    out.note = pos.label;
+  }
+  return out;
+}
+
 /**
  * @param {Buffer} buffer
  * @param {string} fileName
  * @param {string} [mime]
- * @param {{ force?: boolean }} [opts] force=true 이면 캐시 무시하고 재변환
+ * @param {{ force?: boolean }} [opts] force=true 이면 Gemini까지 재호출
  */
 async function convertScoreToTab(buffer, fileName, mime, opts = {}) {
-  // 포지션 운지 로직 변경 시 캐시 무효화
-  const hash = bufferHash(buffer) + ':v4-box';
+  // v5: 원본 스코어만 캐시 → 매번 포지션 운지 재적용
+  const hash = bufferHash(buffer) + ':v5-raw';
   const force = Boolean(opts.force);
-  if (!force) {
-    const cached = cacheGet(hash);
-    if (cached) {
-      console.log('[tab] 캐시 히트');
-      return { ...cached, cached: true };
-    }
+
+  if (force) {
+    cacheDelete(hash);
+    console.log('[tab] 강제 재변환 · 캐시 삭제');
   } else {
-    console.log('[tab] 강제 재변환 · 캐시 무시');
+    const cached = cacheGet(hash);
+    // rawScore가 있으면 Gemini 생략, 운지만 최신 로직으로 다시 그림
+    if (cached?.rawScore?.measures?.length) {
+      console.log('[tab] 원본 캐시 히트 · 포지션 재렌더');
+      return finalizeScore(cached.rawScore, {
+        model: cached.model,
+        method: cached.method || 'gemini',
+        fromCache: true,
+      });
+    }
   }
 
   if (!isConfigured()) {
     console.warn('[tab] GEMINI_API_KEY 없음 → 데모 탭');
-    const demo = remapScoreToKeyPosition(demoScore());
-    const out = await scoreToOutputs(demo);
-    out.method = 'demo';
+    const out = await finalizeScore(demoScore(), {
+      method: 'demo',
+      fromCache: false,
+    });
     out.note =
       'Gemini API 키가 없어 데모 탭을 표시합니다. 서버에 GEMINI_API_KEY를 설정하면 실제 악보를 변환합니다.';
     return out;
@@ -275,7 +308,7 @@ JSON만:
   ];
 
   const timeoutMs = Math.min(150000, 50000 + images.length * 20000);
-  console.log(`[tab] Gemini 변환 · pages=${images.length}`);
+  console.log(`[tab] Gemini 변환 · pages=${images.length} · force=${force}`);
 
   const response = await generateContent({
     contents: parts,
@@ -304,27 +337,21 @@ JSON만:
     score.title = '변환 부분 실패 · 샘플 탭';
   }
 
-  // 조성 포지션으로 서버에서 최종 운지 확정
-  score = remapScoreToKeyPosition(score);
-  const pos = getPositionForKey(score.key);
-  console.log(
-    `[tab] 포지션 ${pos.label} · key=${score.key} · measures=${score.measures.length}`,
-  );
+  // 원본(리맵 전)만 캐시 — 다음 요청에서 최신 포지션 로직 적용
+  cacheSet(hash, {
+    rawScore: score,
+    model: response.model,
+    method: 'gemini',
+  });
 
-  const out = await scoreToOutputs(score);
-  out.method = 'gemini';
-  out.model = response.model;
-  if (score.partial) {
-    out.note = `응답이 중간에 잘려 ${out.measureCount}마디만 복구 · ${pos.label}`;
-  } else if (out.measureCount < 12) {
-    out.note = `${out.measureCount}마디 인식 · ${pos.label}`;
-  } else {
-    out.note = pos.label;
-  }
+  const out = await finalizeScore(score, {
+    model: response.model,
+    method: 'gemini',
+    fromCache: false,
+  });
   console.log(
-    `[tab] 완료 · measures=${out.measureCount} · model=${response.model}`,
+    `[tab] 완료 · measures=${out.measureCount} · model=${response.model} · force=${force}`,
   );
-  cacheSet(hash, out);
   return out;
 }
 

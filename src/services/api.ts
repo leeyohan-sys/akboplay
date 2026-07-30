@@ -319,12 +319,15 @@ export const api = {
     const form = new FormData();
     const name = file.name || 'score.png';
     form.append('fileName', name);
+    // multer body + 쿼리 둘 다 (일부 환경에서 body 필드 누락 대비)
     if (opts?.force) form.append('force', '1');
     form.append('file', file, name);
-    return request<TabConvertResult>('/api/tab-convert', {
+    const q = opts?.force ? '?force=1' : '';
+    return request<TabConvertResult>(`/api/tab-convert${q}`, {
       method: 'POST',
       body: form,
       timeoutMs: 150000,
+      headers: opts?.force ? { 'X-Tab-Force': '1' } : undefined,
     });
   },
 
@@ -361,10 +364,12 @@ export const api = {
       } as unknown as Blob);
     }
 
-    return request<TabConvertResult>('/api/tab-convert', {
+    const q = opts?.force ? '?force=1' : '';
+    return request<TabConvertResult>(`/api/tab-convert${q}`, {
       method: 'POST',
       body: form,
       timeoutMs: 150000,
+      headers: opts?.force ? { 'X-Tab-Force': '1' } : undefined,
     });
   },
 };
