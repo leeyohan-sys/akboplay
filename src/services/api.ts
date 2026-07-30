@@ -312,15 +312,19 @@ export const api = {
     }),
 
   /** 웹 File → 기타 탭 변환 */
-  convertToTabFile: async (file: File): Promise<TabConvertResult> => {
+  convertToTabFile: async (
+    file: File,
+    opts?: { force?: boolean },
+  ): Promise<TabConvertResult> => {
     const form = new FormData();
     const name = file.name || 'score.png';
     form.append('fileName', name);
+    if (opts?.force) form.append('force', '1');
     form.append('file', file, name);
     return request<TabConvertResult>('/api/tab-convert', {
       method: 'POST',
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 150000,
     });
   },
 
@@ -330,10 +334,12 @@ export const api = {
     fileName: string,
     file?: File | Blob | null,
     mimeType = 'image/png',
+    opts?: { force?: boolean },
   ): Promise<TabConvertResult> => {
     const form = new FormData();
     const name = fileName || 'score.png';
     form.append('fileName', name);
+    if (opts?.force) form.append('force', '1');
 
     if (Platform.OS === 'web') {
       let blob: Blob;
@@ -358,7 +364,7 @@ export const api = {
     return request<TabConvertResult>('/api/tab-convert', {
       method: 'POST',
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 150000,
     });
   },
 };

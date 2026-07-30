@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Image,
   Linking,
@@ -21,6 +21,15 @@ import type { TabConvertResult } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TabConvert'>;
 
+type LastUpload = {
+  kind: 'web-file' | 'native';
+  file?: File;
+  uri?: string;
+  fileName: string;
+  mimeType?: string;
+  nativeFile?: File | Blob | null;
+};
+
 function downloadBase64(base64: string, mime: string, fileName: string) {
   if (Platform.OS !== 'web' || typeof document === 'undefined') return;
   const a = document.createElement('a');
@@ -36,13 +45,26 @@ export function TabConvertScreen({}: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TabConvertResult | null>(null);
+  const [hasLastUpload, setHasLastUpload] = useState(false);
+  const lastUploadRef = useRef<LastUpload | null>(null);
 
-  const convertFile = useCallback(async (file: File) => {
+  const runConvert = useCallback(async (upload: LastUpload, force: boolean) => {
     setError(null);
     setLoading(true);
-    setResult(null);
+    if (force) setResult(null);
     try {
-      const out = await api.convertToTabFile(file);
+      let out: TabConvertResult;
+      if (upload.kind === 'web-file' && upload.file) {
+        out = await api.convertToTabFile(upload.file, { force });
+      } else {
+        out = await api.convertToTab(
+          upload.uri || '',
+          upload.fileName,
+          upload.nativeFile ?? null,
+          upload.mimeType || 'image/png',
+          { force },
+        );
+      }
       setResult(out);
     } catch (e) {
       setError(e instanceof Error ? e.message : '탭 변환에 실패했습니다.');
@@ -57,34 +79,50 @@ export function TabConvertScreen({}: Props) {
       if (Platform.OS === 'web') {
         const file = await pickScoreFileWeb();
         if (!file) return;
-        await convertFile(file);
+        const upload: LastUpload = {
+          kind: 'web-file',
+          file,
+          fileName: file.name || 'score.png',
+        };
+        lastUploadRef.current = upload;
+        setHasLastUpload(true);
+        await runConvert(upload, false);
         return;
       }
 
-      setLoading(true);
       const picked = await DocumentPicker.getDocumentAsync({
         type: ['image/*', 'application/pdf'],
         copyToCacheDirectory: true,
         multiple: false,
       });
-      if (picked.canceled || !picked.assets?.[0]) {
-        setLoading(false);
-        return;
-      }
+      if (picked.canceled || !picked.assets?.[0]) return;
+
       const asset = picked.assets[0];
-      const out = await api.convertToTab(
-        asset.uri,
-        asset.name || 'score.png',
-        (asset as { file?: File }).file ?? null,
-        asset.mimeType || 'image/png',
-      );
-      setResult(out);
+      const upload: LastUpload = {
+        kind: 'native',
+        uri: asset.uri,
+        fileName: asset.name || 'score.png',
+        mimeType: asset.mimeType || 'image/png',
+        nativeFile: (asset as { file?: File }).file ?? null,
+      };
+      lastUploadRef.current = upload;
+      setHasLastUpload(true);
+      await runConvert(upload, false);
     } catch (e) {
       setError(e instanceof Error ? e.message : '탭 변환에 실패했습니다.');
-    } finally {
       setLoading(false);
     }
-  }, [convertFile]);
+  }, [runConvert]);
+
+  /** 같은 파일로 캐시 무시하고 재변환 */
+  const reconvert = useCallback(async () => {
+    const last = lastUploadRef.current;
+    if (!last) {
+      setError('다시 변환할 파일이 없습니다. 먼저 악보를 업로드해 주세요.');
+      return;
+    }
+    await runConvert(last, true);
+  }, [runConvert]);
 
   const pngUri = result?.pngBase64
     ? `data:image/png;base64,${result.pngBase64}`
@@ -98,7 +136,16 @@ export function TabConvertScreen({}: Props) {
             label={loading ? '변환 중…' : '악보 이미지/PDF 업로드'}
             onPress={pickAndConvert}
             loading={loading}
+            disabled={loading}
           />
+          {hasLastUpload ? (
+            <PrimaryButton
+              label="다시 변환"
+              variant="ghost"
+              onPress={reconvert}
+              disabled={loading}
+            />
+          ) : null}
           {result?.pngBase64 ? (
             <PrimaryButton
               label="PNG 저장"
@@ -110,6 +157,7 @@ export function TabConvertScreen({}: Props) {
                   `${(result.title || 'tab').replace(/\s+/g, '_')}.png`,
                 )
               }
+              disabled={loading}
             />
           ) : null}
           {result?.pdfBase64 ? (
@@ -123,6 +171,7 @@ export function TabConvertScreen({}: Props) {
                   `${(result.title || 'tab').replace(/\s+/g, '_')}.pdf`,
                 )
               }
+              disabled={loading}
             />
           ) : null}
         </View>
@@ -137,7 +186,7 @@ export function TabConvertScreen({}: Props) {
         <Text style={styles.title}>TAB 변환</Text>
         <Text style={[typography.body, styles.sub]}>
           오선 악보 이미지를 올리면 기타 탭(TAB)으로 바꿔 보여 줍니다.
-          {'\n'}Soundslice·Flat처럼 6선 탭으로 확인·저장할 수 있습니다.
+          {'\n'}같은 파일은 「다시 변환」으로 캐시 없이 재처리할 수 있습니다.
         </Text>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -155,6 +204,7 @@ export function TabConvertScreen({}: Props) {
                   ? `${result.measureCount}마디`
                   : null,
                 result.method === 'demo' ? '데모' : 'AI 변환',
+                result.cached ? '캐시' : null,
               ]
                 .filter(Boolean)
                 .join(' · ')}

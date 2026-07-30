@@ -58,5 +58,5 @@ export type TabConvertResult = {
   mimePdf?: string;
   method?: string;
   note?: string;
-  model?: string;
+  cached?: boolean;
 };

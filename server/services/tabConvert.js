@@ -219,14 +219,20 @@ async function scoreToOutputs(score) {
  * @param {Buffer} buffer
  * @param {string} fileName
  * @param {string} [mime]
+ * @param {{ force?: boolean }} [opts] force=true 이면 캐시 무시하고 재변환
  */
-async function convertScoreToTab(buffer, fileName, mime) {
+async function convertScoreToTab(buffer, fileName, mime, opts = {}) {
   // 포지션 운지 로직 변경 시 캐시 무효화
   const hash = bufferHash(buffer) + ':v4-box';
-  const cached = cacheGet(hash);
-  if (cached) {
-    console.log('[tab] 캐시 히트');
-    return { ...cached, cached: true };
+  const force = Boolean(opts.force);
+  if (!force) {
+    const cached = cacheGet(hash);
+    if (cached) {
+      console.log('[tab] 캐시 히트');
+      return { ...cached, cached: true };
+    }
+  } else {
+    console.log('[tab] 강제 재변환 · 캐시 무시');
   }
 
   if (!isConfigured()) {

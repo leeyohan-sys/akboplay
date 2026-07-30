@@ -184,8 +184,15 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
       `[tab-convert] ${fileName} (${req.file.size} bytes, ${req.file.mimetype})`,
     );
 
+    const force =
+      req.body?.force === '1' ||
+      req.body?.force === 'true' ||
+      req.body?.force === true;
+
     const result = await Promise.race([
-      convertScoreToTab(req.file.buffer, fileName, req.file.mimetype),
+      convertScoreToTab(req.file.buffer, fileName, req.file.mimetype, {
+        force,
+      }),
       new Promise((_, reject) =>
         setTimeout(
           () => reject(new Error('탭 변환 시간이 초과되었습니다.')),
