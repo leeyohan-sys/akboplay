@@ -222,7 +222,7 @@ async function scoreToOutputs(score) {
  */
 async function convertScoreToTab(buffer, fileName, mime) {
   // 포지션 운지 로직 변경 시 캐시 무효화
-  const hash = bufferHash(buffer) + ':v3-pos';
+  const hash = bufferHash(buffer) + ':v4-box';
   const cached = cacheGet(hash);
   if (cached) {
     console.log('[tab] 캐시 히트');
