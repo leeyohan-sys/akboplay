@@ -6,6 +6,7 @@ import { SongsScreen } from '../screens/SongsScreen';
 import { PlaylistScreen } from '../screens/PlaylistScreen';
 import { BeatDetectScreen } from '../screens/BeatDetectScreen';
 import { TabConvertScreen } from '../screens/TabConvertScreen';
+import { PlaylistPdfScreen } from '../screens/PlaylistPdfScreen';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from './types';
 
@@ -60,6 +61,11 @@ export function RootNavigator() {
           name="TabConvert"
           component={TabConvertScreen}
           options={{ title: 'TAB 변환' }}
+        />
+        <Stack.Screen
+          name="PlaylistPdf"
+          component={PlaylistPdfScreen}
+          options={{ title: 'PDF 만들기' }}
         />
         <Stack.Screen
           name="Playlist"

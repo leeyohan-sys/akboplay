@@ -38,6 +38,28 @@ export type PlaylistResult = {
   videoCount: number;
 };
 
+/** 유튜브 재생목록 → 악보 PDF */
+export type PlaylistScorePdfResult = {
+  fileName: string;
+  playlistTitle: string;
+  playlistId: string;
+  pageCount: number;
+  songCount: number;
+  foundCount: number;
+  pdfBase64: string;
+  mimePdf: string;
+  songs: {
+    index: number;
+    title: string;
+    videoTitle?: string;
+    channel?: string;
+    scoreFound: boolean;
+    scoreVideoTitle?: string | null;
+    sourceVideoId?: string;
+    scoreVideoId?: string | null;
+  }[];
+};
+
 /** 악보 → 기타 탭 변환 결과 */
 export type TabConvertResult = {
   fileName: string;

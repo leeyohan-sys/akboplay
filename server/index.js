@@ -13,6 +13,7 @@ const {
   createPlaylist,
 } = require('./services/youtube');
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
+const { buildPlaylistScorePdf } = require('./services/playlistScorePdf');
 const { decodeUploadFileName } = require('./utils/fileName');
 const { convertScoreToTab } = require('./services/tabConvert');
 const { isConfigured: isGeminiConfigured } = require('./services/geminiClient');
@@ -222,6 +223,41 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
     }
     return res.status(500).json({
       error: msg || '탭 변환에 실패했습니다.',
+    });
+  }
+});
+
+/** 유튜브 재생목록 → 악보 검색 → 한 페이지 2곡 PDF */
+app.post('/api/playlist-score-pdf', async (req, res) => {
+  res.setTimeout(180000);
+  try {
+    const playlistUrl = String(req.body?.playlistUrl || '').trim();
+    if (!playlistUrl) {
+      return res.status(400).json({
+        error: '유튜브 재생목록 URL이 필요합니다.',
+      });
+    }
+
+    console.log(`[playlist-score-pdf] 요청 · ${playlistUrl.slice(0, 80)}`);
+    const result = await Promise.race([
+      buildPlaylistScorePdf(playlistUrl),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('PDF 생성 시간이 초과되었습니다.')),
+          170000,
+        ),
+      ),
+    ]);
+    console.log(
+      `[playlist-score-pdf] 완료 · ${result.songCount}곡 · ${result.pageCount}페이지 · 악보 ${result.foundCount}`,
+    );
+    return res.json(result);
+  } catch (err) {
+    console.error('[playlist-score-pdf]', err);
+    const status =
+      err.code === 'BAD_URL' || err.code === 'EMPTY' ? 400 : 500;
+    return res.status(status).json({
+      error: err.message || '재생목록 악보 PDF 생성에 실패했습니다.',
     });
   }
 });

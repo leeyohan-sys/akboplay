@@ -5,6 +5,7 @@ export type RootStackParamList = {
   Songs: { analyze: AnalyzeResult };
   BeatDetect: undefined;
   TabConvert: undefined;
+  PlaylistPdf: undefined;
   Playlist: {
     fileName: string;
     songs: MatchedSong[];

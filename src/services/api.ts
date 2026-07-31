@@ -4,6 +4,7 @@ import type {
   AnalyzeResult,
   MatchedSong,
   PlaylistResult,
+  PlaylistScorePdfResult,
   TabConvertResult,
 } from '../types';
 
@@ -327,6 +328,15 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+
+  /** 유튜브 재생목록 → 악보 PDF (한 페이지 2곡) */
+  playlistScorePdf: (playlistUrl: string) =>
+    request<PlaylistScorePdfResult>('/api/playlist-score-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playlistUrl }),
+      timeoutMs: 180000,
     }),
 
   /** 웹 File → 기타 탭 변환 */

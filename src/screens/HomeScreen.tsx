@@ -193,6 +193,12 @@ export function HomeScreen({ navigation }: Props) {
             onPress={pickPdf}
             loading={loading}
           />
+          <PrimaryButton
+            label="PDF 만들기"
+            onPress={() => navigation.navigate('PlaylistPdf')}
+            variant="ghost"
+            disabled={loading}
+          />
           {/* 데모로 미리보기: 임시로 숨김
           <PrimaryButton
             label="데모로 미리보기"
