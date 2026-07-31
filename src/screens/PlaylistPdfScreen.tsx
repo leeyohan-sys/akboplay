@@ -160,11 +160,16 @@ export function PlaylistPdfScreen({}: Props) {
         );
       }
     } catch (e) {
-      setError(
+      const raw =
         e instanceof Error
           ? e.message
-          : '재생목록 악보 PDF 생성에 실패했습니다.',
-      );
+          : '재생목록 악보 PDF 생성에 실패했습니다.';
+      // API 미배포(404)일 때 모바일에서 원인 파악이 쉽도록 안내
+      const msg =
+        /404|Cannot POST|찾을 수 없/i.test(raw)
+          ? 'API 서버가 아직 업데이트되지 않았습니다. Render에서 Manual Deploy 후 1~2분 뒤 다시 시도해 주세요.'
+          : raw;
+      setError(msg);
       setStatus('');
     } finally {
       setLoading(false);
