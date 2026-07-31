@@ -5,8 +5,8 @@ const YouTube = require('youtube-sr').default;
 const { randomUUID } = require('crypto');
 
 const MAX_SONGS = 24;
-const SEARCH_TIMEOUT_MS = 15000;
-const FETCH_TIMEOUT_MS = 15000;
+const SEARCH_TIMEOUT_MS = 9000;
+const FETCH_TIMEOUT_MS = 10000;
 /** A4 가로(landscape) ~150dpi — 참고 PDF(오후예배찬양)와 동일 방향 */
 const PAGE_W = 1754;
 const PAGE_H = 1240;
@@ -564,7 +564,7 @@ async function findScoreImageBuffer(metaOrTitle) {
     // eslint-disable-next-line no-await-in-loop
     const found = await searchScoreImages(q);
     candidates.push(...found);
-    if (candidates.length >= 20) break;
+    if (candidates.length >= 12) break;
   }
 
   const seen = new Set();
@@ -583,7 +583,7 @@ async function findScoreImageBuffer(metaOrTitle) {
     .map((c) => ({ ...c, hit: scoreImageCandidate(c, songTitle, artist) }))
     .sort((a, b) => b.hit - a.hit);
 
-  for (const c of ranked.slice(0, 14)) {
+  for (const c of ranked.slice(0, 8)) {
     if (c.hit < 30) continue;
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -895,8 +895,12 @@ async function mapPool(items, concurrency, worker) {
 
 /**
  * @param {string} playlistUrl
+ * @param {{ onProgress?: (p: { stage: string, message: string, current?: number, total?: number }) => void }} [opts]
  */
-async function buildPlaylistScorePdf(playlistUrl) {
+async function buildPlaylistScorePdf(playlistUrl, opts = {}) {
+  const onProgress =
+    typeof opts.onProgress === 'function' ? opts.onProgress : () => undefined;
+
   const playlistId = extractPlaylistId(playlistUrl);
   if (!playlistId) {
     const err = new Error(
@@ -906,6 +910,10 @@ async function buildPlaylistScorePdf(playlistUrl) {
     throw err;
   }
 
+  onProgress({
+    stage: 'playlist',
+    message: '재생목록을 불러오는 중…',
+  });
   console.log(`[playlist-score-pdf] playlist=${playlistId}`);
 
   let loaded;
@@ -933,17 +941,27 @@ async function buildPlaylistScorePdf(playlistUrl) {
   );
 
   const playlistTitle = loaded.title || '악보플레이 재생목록';
+  const total = videos.length;
+  let doneCount = 0;
 
-  const songs = await mapPool(videos, 2, async (video, idx) => {
+  const songs = await mapPool(videos, 3, async (video, idx) => {
     const meta = extractSongMeta(video.title || '');
     const title = meta.title || video.title || `곡 ${idx + 1}`;
     let imageBuffer = null;
     let scoreFound = false;
     let scoreImageTitle = null;
     let scoreImageUrl = null;
+    let found = null;
+
+    onProgress({
+      stage: 'search',
+      message: `악보 검색 중… (${idx + 1}/${total}) ${title}`,
+      current: idx + 1,
+      total,
+    });
 
     try {
-      const found = await findScoreImageBuffer(meta);
+      found = await findScoreImageBuffer(meta);
       if (found.scoreFound && found.buffer) {
         imageBuffer = found.buffer;
         scoreFound = true;
@@ -951,7 +969,7 @@ async function buildPlaylistScorePdf(playlistUrl) {
         scoreImageUrl = found.meta?.url || null;
       }
       console.log(
-        `[playlist-score-pdf] #${idx + 1} title="${title}" artist="${meta.artist}" query="${meta.searchQuery}" found=${scoreFound} hit=${found.meta?.hit || '-'} img="${(scoreImageTitle || '').slice(0, 40)}"`,
+        `[playlist-score-pdf] #${idx + 1} title="${title}" artist="${meta.artist}" query="${meta.searchQuery}" found=${scoreFound} hit=${found?.meta?.hit || '-'} img="${(scoreImageTitle || '').slice(0, 40)}"`,
       );
     } catch (e) {
       console.warn(
@@ -959,6 +977,14 @@ async function buildPlaylistScorePdf(playlistUrl) {
         String(e.message || e).slice(0, 120),
       );
     }
+
+    doneCount += 1;
+    onProgress({
+      stage: 'search',
+      message: `악보 검색 ${doneCount}/${total} 완료`,
+      current: doneCount,
+      total,
+    });
 
     return {
       id: randomUUID(),
@@ -976,6 +1002,13 @@ async function buildPlaylistScorePdf(playlistUrl) {
     };
   });
 
+  onProgress({
+    stage: 'compose',
+    message: 'PDF 페이지를 만드는 중…',
+    current: total,
+    total,
+  });
+
   const pages = [];
   for (let i = 0; i < songs.length; i += 2) {
     const pair = songs.slice(i, i + 2);
@@ -988,6 +1021,13 @@ async function buildPlaylistScorePdf(playlistUrl) {
     .replace(/[\\/:*?"<>|]+/g, '_')
     .slice(0, 40);
 
+  onProgress({
+    stage: 'done',
+    message: 'PDF 생성 완료',
+    current: total,
+    total,
+  });
+
   return {
     fileName: `${safeName || 'akboplay'}-악보.pdf`,
     playlistTitle,
@@ -996,6 +1036,7 @@ async function buildPlaylistScorePdf(playlistUrl) {
     songCount: songs.length,
     foundCount: songs.filter((s) => s.scoreFound).length,
     pdfBase64: pdf.toString('base64'),
+    pdfBuffer: pdf,
     mimePdf: 'application/pdf',
     songs: songs.map((s) => ({
       index: s.index,

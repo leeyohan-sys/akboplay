@@ -330,7 +330,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /** 유튜브 재생목록 → 악보 PDF (한 페이지 2곡) */
+  /** 유튜브 재생목록 → 악보 PDF (동기, 호환용) */
   playlistScorePdf: (playlistUrl: string) =>
     request<PlaylistScorePdfResult>('/api/playlist-score-pdf', {
       method: 'POST',
@@ -338,6 +338,62 @@ export const api = {
       body: JSON.stringify({ playlistUrl }),
       timeoutMs: 180000,
     }),
+
+  /** 모바일 친화: 작업 시작 */
+  startPlaylistScorePdfJob: (playlistUrl: string) =>
+    request<{
+      jobId: string;
+      status: string;
+      message?: string;
+    }>('/api/playlist-score-pdf/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playlistUrl }),
+      timeoutMs: 60000,
+    }),
+
+  /** 작업 상태 폴링 */
+  getPlaylistScorePdfJob: (jobId: string) =>
+    request<{
+      jobId: string;
+      status: 'queued' | 'running' | 'done' | 'error';
+      message?: string;
+      stage?: string;
+      current?: number;
+      total?: number;
+      error?: string | null;
+      result?: Omit<PlaylistScorePdfResult, 'pdfBase64'> & { hasPdf?: boolean };
+    }>(`/api/playlist-score-pdf/jobs/${encodeURIComponent(jobId)}`, {
+      timeoutMs: 30000,
+    }),
+
+  /** 완성 PDF 파일 URL (다운로드/새 탭) */
+  playlistScorePdfFileUrl: (jobId: string) =>
+    `${API_BASE}/api/playlist-score-pdf/jobs/${encodeURIComponent(jobId)}/file`,
+
+  /** PDF 바이너리 다운로드 (Blob) */
+  downloadPlaylistScorePdfFile: async (jobId: string): Promise<Blob> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/playlist-score-pdf/jobs/${encodeURIComponent(jobId)}/file`,
+        { signal: controller.signal },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data as { error?: string }).error ||
+            `PDF 다운로드 실패 (${res.status})`,
+        );
+      }
+      return await res.blob();
+    } catch (e) {
+      throw friendlyFetchError(e);
+    } finally {
+      clearTimeout(timer);
+    }
+  },
 
   /** 웹 File → 기타 탭 변환 */
   convertToTabFile: async (

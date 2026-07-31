@@ -13,10 +13,50 @@ const {
   createPlaylist,
 } = require('./services/youtube');
 const { buildAutoPlaylist } = require('./services/autoPlaylist');
+const { randomUUID } = require('crypto');
 const { buildPlaylistScorePdf } = require('./services/playlistScorePdf');
 const { decodeUploadFileName } = require('./utils/fileName');
 const { convertScoreToTab } = require('./services/tabConvert');
 const { isConfigured: isGeminiConfigured } = require('./services/geminiClient');
+
+/** 재생목록 PDF 비동기 작업 (모바일 장시간 요청 타임아웃 방지) */
+const pdfJobs = new Map();
+const PDF_JOB_TTL_MS = 30 * 60 * 1000;
+
+function cleanupPdfJobs() {
+  const now = Date.now();
+  for (const [id, job] of pdfJobs.entries()) {
+    if (now - (job.updatedAt || job.createdAt || 0) > PDF_JOB_TTL_MS) {
+      pdfJobs.delete(id);
+    }
+  }
+}
+
+function publicJob(job) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    message: job.message || '',
+    stage: job.stage || '',
+    current: job.current || 0,
+    total: job.total || 0,
+    error: job.error || null,
+    result: job.result
+      ? {
+          fileName: job.result.fileName,
+          playlistTitle: job.result.playlistTitle,
+          playlistId: job.result.playlistId,
+          pageCount: job.result.pageCount,
+          songCount: job.result.songCount,
+          foundCount: job.result.foundCount,
+          mimePdf: job.result.mimePdf,
+          songs: job.result.songs,
+          // 큰 base64는 상태 응답에서 제외 (다운로드 엔드포인트 사용)
+          hasPdf: Boolean(job.result.pdfBuffer || job.result.pdfBase64),
+        }
+      : null,
+  };
+}
 
 const app = express();
 const upload = multer({
@@ -51,7 +91,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'tab-force-v5-20260730',
+    version: 'playlist-pdf-async-v1-20260731',
   });
 });
 
@@ -227,7 +267,7 @@ app.post('/api/tab-convert', upload.single('file'), async (req, res) => {
   }
 });
 
-/** 유튜브 재생목록 → 악보 검색 → 한 페이지 2곡 PDF */
+/** 유튜브 재생목록 → 악보 PDF (동기, 호환용) */
 app.post('/api/playlist-score-pdf', async (req, res) => {
   res.setTimeout(180000);
   try {
@@ -251,7 +291,8 @@ app.post('/api/playlist-score-pdf', async (req, res) => {
     console.log(
       `[playlist-score-pdf] 완료 · ${result.songCount}곡 · ${result.pageCount}페이지 · 악보 ${result.foundCount}`,
     );
-    return res.json(result);
+    const { pdfBuffer, ...json } = result;
+    return res.json(json);
   } catch (err) {
     console.error('[playlist-score-pdf]', err);
     const status =
@@ -260,6 +301,115 @@ app.post('/api/playlist-score-pdf', async (req, res) => {
       error: err.message || '재생목록 악보 PDF 생성에 실패했습니다.',
     });
   }
+});
+
+/** 모바일용: 작업 시작 → 즉시 jobId 반환 */
+app.post('/api/playlist-score-pdf/jobs', async (req, res) => {
+  cleanupPdfJobs();
+  try {
+    const playlistUrl = String(req.body?.playlistUrl || '').trim();
+    if (!playlistUrl) {
+      return res.status(400).json({
+        error: '유튜브 재생목록 URL이 필요합니다.',
+      });
+    }
+
+    const id = randomUUID();
+    const job = {
+      id,
+      status: 'queued',
+      stage: 'queued',
+      message: '대기 중…',
+      current: 0,
+      total: 0,
+      error: null,
+      result: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    pdfJobs.set(id, job);
+
+    // 백그라운드 생성 (요청은 바로 반환)
+    setImmediate(() => {
+      job.status = 'running';
+      job.message = '시작…';
+      job.updatedAt = Date.now();
+      buildPlaylistScorePdf(playlistUrl, {
+        onProgress: (p) => {
+          job.stage = p.stage || job.stage;
+          job.message = p.message || job.message;
+          if (typeof p.current === 'number') job.current = p.current;
+          if (typeof p.total === 'number') job.total = p.total;
+          job.updatedAt = Date.now();
+        },
+      })
+        .then((result) => {
+          job.status = 'done';
+          job.stage = 'done';
+          job.message = '완료';
+          job.result = result;
+          job.updatedAt = Date.now();
+          console.log(
+            `[playlist-score-pdf/jobs] ${id} 완료 · ${result.songCount}곡`,
+          );
+        })
+        .catch((err) => {
+          job.status = 'error';
+          job.stage = 'error';
+          job.error = err.message || 'PDF 생성 실패';
+          job.message = job.error;
+          job.updatedAt = Date.now();
+          console.error(`[playlist-score-pdf/jobs] ${id}`, err);
+        });
+    });
+
+    return res.status(202).json(publicJob(job));
+  } catch (err) {
+    console.error('[playlist-score-pdf/jobs]', err);
+    return res.status(500).json({
+      error: err.message || '작업 시작에 실패했습니다.',
+    });
+  }
+});
+
+/** 작업 상태 폴링 */
+app.get('/api/playlist-score-pdf/jobs/:id', (req, res) => {
+  cleanupPdfJobs();
+  const job = pdfJobs.get(String(req.params.id || ''));
+  if (!job) {
+    return res.status(404).json({ error: '작업을 찾을 수 없습니다.' });
+  }
+  return res.json(publicJob(job));
+});
+
+/** PDF 파일 다운로드 (모바일 Blob/새 탭용) */
+app.get('/api/playlist-score-pdf/jobs/:id/file', (req, res) => {
+  cleanupPdfJobs();
+  const job = pdfJobs.get(String(req.params.id || ''));
+  if (!job) {
+    return res.status(404).json({ error: '작업을 찾을 수 없습니다.' });
+  }
+  if (job.status !== 'done' || !job.result) {
+    return res.status(409).json({ error: '아직 PDF가 준비되지 않았습니다.' });
+  }
+
+  const buf =
+    job.result.pdfBuffer ||
+    (job.result.pdfBase64
+      ? Buffer.from(job.result.pdfBase64, 'base64')
+      : null);
+  if (!buf) {
+    return res.status(500).json({ error: 'PDF 데이터가 없습니다.' });
+  }
+
+  const fileName = job.result.fileName || 'akboplay-score.pdf';
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+  );
+  res.setHeader('Content-Length', String(buf.length));
+  return res.send(buf);
 });
 
 /** (선택) OAuth API로 플레이리스트 생성 — 기본 플로우에서는 사용하지 않음 */

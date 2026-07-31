@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -18,27 +19,79 @@ import type { PlaylistScorePdfResult } from '../types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlaylistPdf'>;
 
-function downloadBase64(base64: string, mime: string, fileName: string) {
-  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-  const a = document.createElement('a');
-  a.href = `data:${mime};base64,${base64}`;
-  a.download = fileName;
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+type JobResult = Omit<PlaylistScorePdfResult, 'pdfBase64'> & {
+  hasPdf?: boolean;
+  jobId?: string;
+};
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 모바일/PC 공통 PDF 저장·열기 */
+async function openOrDownloadPdf(
+  blob: Blob,
+  fileName: string,
+  fileUrl?: string,
+) {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    if (fileUrl) {
+      await Linking.openURL(fileUrl);
+    }
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
+
+  try {
+    // iOS Safari는 download 속성이 약해 새 탭으로 여는 편이 안정적
+    if (isIOS) {
+      const opened = window.open(url, '_blank');
+      if (!opened && fileUrl) {
+        window.location.href = fileUrl;
+      }
+      return;
+    }
+
+    if (isAndroid && fileUrl) {
+      // 안드로이드 크롬: 서버 URL 직접 이동이 다운로드에 유리한 경우 많음
+      window.location.href = fileUrl;
+      return;
+    }
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName || 'akboplay-score.pdf';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
 }
 
 export function PlaylistPdfScreen({}: Props) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<PlaylistScorePdfResult | null>(null);
+  const [result, setResult] = useState<JobResult | null>(null);
   const [status, setStatus] = useState('');
+  const [jobId, setJobId] = useState<string | null>(null);
+
+  const downloadReadyPdf = async (id: string, fileName: string) => {
+    const fileUrl = api.playlistScorePdfFileUrl(id);
+    const blob = await api.downloadPlaylistScorePdfFile(id);
+    await openOrDownloadPdf(blob, fileName, fileUrl);
+  };
 
   const makePdf = async () => {
     setError(null);
     setResult(null);
+    setJobId(null);
     const playlistUrl = url.trim();
     if (!playlistUrl) {
       setError('유튜브 재생목록 URL을 입력해 주세요.');
@@ -51,21 +104,59 @@ export function PlaylistPdfScreen({}: Props) {
       try {
         await api.wakeUp();
       } catch {
-        /* 변환은 계속 시도 */
+        /* 계속 시도 */
       }
 
-      setStatus('재생목록·악보 검색 중… (곡 수에 따라 1~2분 걸릴 수 있습니다)');
-      const out = await api.playlistScorePdf(playlistUrl);
+      setStatus('작업 시작 중…');
+      const started = await api.startPlaylistScorePdfJob(playlistUrl);
+      const id = started.jobId;
+      if (!id) {
+        throw new Error('작업 ID를 받지 못했습니다.');
+      }
+      setJobId(id);
+      setStatus('재생목록·악보 검색 중…');
+
+      // 짧은 요청을 반복 폴링 → 모바일 장시간 fetch 끊김 방지
+      let final: Awaited<ReturnType<typeof api.getPlaylistScorePdfJob>> | null =
+        null;
+      const startedAt = Date.now();
+      const maxMs = 4 * 60 * 1000;
+
+      while (Date.now() - startedAt < maxMs) {
+        await sleep(2000);
+        // 폴링 중에도 서버 슬립 방지용 짧은 요청
+        const job = await api.getPlaylistScorePdfJob(id);
+        if (job.message) setStatus(job.message);
+        else if (job.total) {
+          setStatus(`진행 중… ${job.current || 0}/${job.total}`);
+        }
+
+        if (job.status === 'done') {
+          final = job;
+          break;
+        }
+        if (job.status === 'error') {
+          throw new Error(job.error || job.message || 'PDF 생성 실패');
+        }
+      }
+
+      if (!final?.result) {
+        throw new Error(
+          '시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.',
+        );
+      }
+
+      const out: JobResult = { ...final.result, jobId: id };
       setResult(out);
       setStatus(
         `${out.playlistTitle} · ${out.songCount}곡 · ${out.pageCount}페이지 · 악보 ${out.foundCount}곡`,
       );
 
-      if (out.pdfBase64) {
-        downloadBase64(
-          out.pdfBase64,
-          out.mimePdf || 'application/pdf',
-          out.fileName || 'akboplay-score.pdf',
+      if (out.hasPdf) {
+        setStatus((prev) => `${prev}\n다운로드 중…`);
+        await downloadReadyPdf(id, out.fileName || 'akboplay-score.pdf');
+        setStatus(
+          `${out.playlistTitle} · ${out.songCount}곡 · ${out.pageCount}페이지 · 악보 ${out.foundCount}곡`,
         );
       }
     } catch (e) {
@@ -89,18 +180,21 @@ export function PlaylistPdfScreen({}: Props) {
             onPress={makePdf}
             loading={loading}
           />
-          {result?.pdfBase64 ? (
+          {result?.hasPdf && (result.jobId || jobId) ? (
             <PrimaryButton
               label="다시 다운로드"
               variant="ghost"
               disabled={loading}
-              onPress={() =>
-                downloadBase64(
-                  result.pdfBase64,
-                  result.mimePdf || 'application/pdf',
-                  result.fileName || 'akboplay-score.pdf',
-                )
-              }
+              onPress={() => {
+                const id = result.jobId || jobId;
+                if (!id) return;
+                downloadReadyPdf(id, result.fileName || 'akboplay-score.pdf').catch(
+                  (e) =>
+                    setError(
+                      e instanceof Error ? e.message : '다운로드에 실패했습니다.',
+                    ),
+                );
+              }}
             />
           ) : null}
         </View>
