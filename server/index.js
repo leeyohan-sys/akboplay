@@ -91,7 +91,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'playlist-pdf-hymnbook-v1-20260731',
+    version: 'playlist-pdf-title-only-v1-20260731',
   });
 });
 
@@ -344,6 +344,10 @@ app.post('/api/playlist-score-pdf/jobs', async (req, res) => {
         },
       })
         .then((result) => {
+          // 상태 폴링 JSON용으로 base64 중복 보관 제거 (메모리)
+          if (result && result.pdfBuffer) {
+            delete result.pdfBase64;
+          }
           job.status = 'done';
           job.stage = 'done';
           job.message = '완료';
