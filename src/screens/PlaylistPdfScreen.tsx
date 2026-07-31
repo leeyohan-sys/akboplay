@@ -211,7 +211,7 @@ export function PlaylistPdfScreen({}: Props) {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.hint}>
-          유튜브 재생목록 URL을 넣으면 곡마다 악보 이미지를 검색해{'\n'}
+          유튜브 재생목록 URL을 넣으면 곡마다 ‘한 곡 전체’ 악보 이미지를 검색해{'\n'}
           가로 한 페이지에 좌·우 2곡씩 PDF로 만듭니다.
         </Text>
 

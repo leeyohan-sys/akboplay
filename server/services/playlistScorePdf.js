@@ -9,9 +9,9 @@ const YouTube = require('youtube-sr').default;
 const { randomUUID } = require('crypto');
 
 const MAX_SONGS = 24;
-const SEARCH_TIMEOUT_MS = 18000;
-const FETCH_TIMEOUT_MS = 10000;
-/** A4 가로(landscape) ~150dpi — 참고 PDF(오후예배찬양)와 동일 방향 */
+const SEARCH_TIMEOUT_MS = 20000;
+const FETCH_TIMEOUT_MS = 12000;
+/** A4 가로(landscape) ~150dpi — 한 페이지에 좌·우 2곡 */
 const PAGE_W = 1754;
 const PAGE_H = 1240;
 const MARGIN = 28;
@@ -430,13 +430,26 @@ async function fetchBuffer(url, referer) {
   }
 }
 
-/** 네이버 등 썸네일 URL을 조금 더 큰 원본에 가깝게 */
+/** 네이버 등 썸네일 URL을 원본에 가깝게 */
 function upgradeImageUrl(url) {
   let u = String(url || '');
   if (!u) return u;
-  // daumcdn thumb → 가능하면 원본 fname 유지
+
+  // daum/kakao 썸네일 → fname 원본
+  const fname = u.match(/[?&]fname=([^&]+)/i);
+  if (fname && /daumcdn|kakaocdn|pstatic/i.test(u)) {
+    try {
+      const decoded = decodeURIComponent(fname[1]);
+      if (/^https?:\/\//i.test(decoded)) u = decoded;
+    } catch {
+      /* keep */
+    }
+  }
+
   u = u.replace(/type=w\d+/i, 'type=w966');
   u = u.replace(/type=ff640_640/i, 'type=w966');
+  u = u.replace(/type=a340/i, 'type=w966');
+  u = u.replace(/\/thumb\/C\d+x\d+[^/]*/i, '/thumb/R0x0');
   return u;
 }
 
@@ -499,9 +512,30 @@ function scoreImageCandidate(img, songTitle, artist = '') {
   const w = Number(img.width) || 0;
   const h = Number(img.height) || 0;
   if (w > 0 && h > 0) {
-    if (h / w >= 1.15) score += 22;
-    else if (h / w >= 0.95) score += 8;
-    else if (w / h >= 1.4) score -= 20;
+    // 한 곡 전체가 한 장에 들어가는 세로형 악보 선호
+    if (h / w >= 1.2) score += 28;
+    else if (h / w >= 1.0) score += 14;
+    else if (w / h >= 1.5) score -= 28;
+    if (h >= 900) score += 12;
+    else if (h >= 700) score += 6;
+    if (w * h >= 700_000) score += 10;
+  }
+
+  // 한 곡 전체 악보 신호
+  if (
+    /전체\s*악보|가사\s*(악보|포함)|단선\s*(멜로디)?\s*악보|코드\s*악보|멜로디\s*악보|피아노\s*악보|한\s*장|full\s*score|lead\s*sheet/i.test(
+      `${title} ${page}`,
+    )
+  ) {
+    score += 28;
+  }
+  // 일부·미리보기·잘린 이미지는 감점
+  if (
+    /1절만|2절만|후렴만|일부|발췌|미리보기|인트로만|하이라이트|썸네일|부분\s*악보|clip|excerpt|preview/i.test(
+      `${title} ${page} ${url}`,
+    )
+  ) {
+    score -= 40;
   }
 
   if (
@@ -511,8 +545,10 @@ function scoreImageCandidate(img, songTitle, artist = '') {
   ) {
     score += 18;
   }
-  if (/youtube\.com|ytimg\.com|pinterest|facebook\.com|lookaside\.fbsbx/i.test(url)) {
-    score -= 25;
+  if (img.provider === 'google') score += 6;
+  // 유튜브 썸네일은 한 곡 전체 악보가 아님
+  if (/youtube\.com|ytimg\.com|i\.ytimg\.com|pinterest|facebook\.com|lookaside\.fbsbx/i.test(url)) {
+    score -= 55;
   }
   if (/emoji|meme|cartoon|스티커|프로필/i.test(title)) score -= 30;
 
@@ -623,6 +659,8 @@ function shouldSkipCandidate(c) {
   const t = `${c.title || ''} ${c.source || ''} ${c.url || ''}`;
   if (/preview-v2|legal\s*use\s*requires\s*purchase/i.test(t)) return true;
   if (/cdn\.mapianist\.com\/preview/i.test(c.url || '')) return true;
+  // 유튜브 썸네일·영상 캡처는 악보 전체가 아님
+  if (/ytimg\.com|i\.ytimg\.com|img\.youtube\.com/i.test(c.url || '')) return true;
   if (
     /\b(drum|드럼보|타악보|percussion)\b/i.test(c.title || '') &&
     !/단선|멜로디|코드|가사|피아노/i.test(c.title || '')
@@ -642,12 +680,13 @@ async function findScoreImageBuffer(metaOrTitle) {
   const artist = meta.artist || '';
   const queries = [
     meta.searchQuery,
+    songTitle && artist ? `${songTitle} ${artist} 전체 악보` : '',
+    songTitle ? `${songTitle} 가사 악보` : '',
     songTitle && artist ? `${songTitle} ${artist} 악보` : '',
     songTitle ? `${songTitle} 단선 악보` : '',
     songTitle ? `${songTitle} 코드 악보` : '',
     songTitle ? `${songTitle} 악보` : '',
     meta.altTitle ? `${meta.altTitle} ${artist} 악보`.trim() : '',
-    // 찬송가 번호가 제목에 없으면 일반 찬송 검색 보강
     songTitle && /갈길을 밝히|새벽부터 우리|구주 예수 의지/i.test(songTitle)
       ? `${songTitle} 찬송가 악보`
       : '',
@@ -677,7 +716,9 @@ async function findScoreImageBuffer(metaOrTitle) {
     .map((c) => ({ ...c, hit: scoreImageCandidate(c, songTitle, artist) }))
     .sort((a, b) => b.hit - a.hit);
 
-  for (const c of ranked.slice(0, 14)) {
+  // 첫 통과가 아니라, 한 곡 전체가 보이는 선명한 악보를 고름
+  let best = null;
+  for (const c of ranked.slice(0, 16)) {
     if (c.hit < 22) continue;
     try {
       // eslint-disable-next-line no-await-in-loop
@@ -686,7 +727,9 @@ async function findScoreImageBuffer(metaOrTitle) {
       // eslint-disable-next-line no-await-in-loop
       const imgMeta = await sharp(buf).metadata();
       if (!imgMeta.width || !imgMeta.height) continue;
-      if (imgMeta.width / imgMeta.height > 1.55 && c.hit < 55) continue;
+      // 가로로 잘린 썸네일/일부 이미지 제외
+      if (imgMeta.width / imgMeta.height > 1.45 && c.hit < 60) continue;
+      if (imgMeta.height < 480 && c.hit < 70) continue;
 
       // eslint-disable-next-line no-await-in-loop
       const clarity = await assessImageClarity(buf);
@@ -696,21 +739,51 @@ async function findScoreImageBuffer(metaOrTitle) {
         );
         continue;
       }
+      // 오선이 거의 없으면(사진·썸네일) 한 곡 전체 악보로 보기 어려움
+      if ((clarity.staffish || 0) < 2 && c.hit < 85) continue;
 
-      return {
-        buffer: buf,
-        meta: {
-          title: c.title,
-          url: c.url,
-          source: c.source,
-          hit: c.hit,
-          clarity: clarity.reason,
-        },
-        scoreFound: true,
-      };
+      const area = imgMeta.width * imgMeta.height;
+      const portraitBonus =
+        imgMeta.height / imgMeta.width >= 1.15
+          ? 20
+          : imgMeta.height / imgMeta.width >= 1.0
+            ? 8
+            : 0;
+      const fitness =
+        c.hit +
+        portraitBonus +
+        Math.min(35, Math.floor(area / 45000)) +
+        Math.min(24, (clarity.staffish || 0) * 2);
+
+      if (!best || fitness > best.fitness) {
+        best = {
+          buffer: buf,
+          meta: {
+            title: c.title,
+            url: c.url,
+            source: c.source,
+            hit: c.hit,
+            fitness,
+            clarity: clarity.reason,
+            provider: c.provider,
+          },
+          scoreFound: true,
+          fitness,
+        };
+      }
+      // 충분히 좋은 전체 악보면 조기 종료
+      if (fitness >= 120 && (clarity.staffish || 0) >= 6) break;
     } catch {
       /* next */
     }
+  }
+
+  if (best) {
+    return {
+      buffer: best.buffer,
+      meta: best.meta,
+      scoreFound: true,
+    };
   }
 
   return { buffer: null, meta: null, scoreFound: false };
@@ -862,7 +935,51 @@ async function searchNaverImages(query, signal) {
   return out;
 }
 
-/** 이미지 검색 (네이버 → Bing → DDG 폴백) */
+/** 구글 이미지 검색 (async JSON) — 한 곡 전체 악보 후보 보강 */
+async function searchGoogleImages(query, signal) {
+  const url = `https://www.google.com/search?q=${encodeURIComponent(
+    query,
+  )}&tbm=isch&hl=ko&gl=kr&asearch=isch&async=_fmt:json,p:1,ijn:0`;
+  const res = await fetch(url, {
+    signal,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
+      Accept: '*/*',
+      Referer: 'https://www.google.com/',
+    },
+  });
+  if (!res.ok) return [];
+  let text = await res.text();
+  text = text.replace(/^\)\]\}'\n?/, '');
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const meta = data?.ischj?.metadata;
+  if (!Array.isArray(meta)) return [];
+
+  return meta
+    .map((m) => {
+      const oi = m.original_image || {};
+      const result = m.result || {};
+      return {
+        title: result.page_title || result.site_title || '',
+        url: normalizeCandidateUrl(oi.url || ''),
+        thumb: normalizeCandidateUrl(m.thumbnail?.url || ''),
+        width: Number(oi.width) || 0,
+        height: Number(oi.height) || 0,
+        source: result.referrer_url || '',
+        provider: 'google',
+      };
+    })
+    .filter((r) => r.url);
+}
+
+/** 이미지 검색 (네이버 + Bing + Google, DDG 폴백) */
 async function searchScoreImages(query) {
   const q = String(query || '').trim();
   if (!q) return [];
@@ -880,16 +997,16 @@ async function searchScoreImages(query) {
   };
 
   try {
-    // 네이버+빙을 같이 모아 Render/로컬 모두에서 후보를 확보
     const settled = await Promise.allSettled([
       searchNaverImages(q, controller.signal),
       searchBingImages(q, controller.signal),
+      searchGoogleImages(q, controller.signal),
     ]);
     for (const s of settled) {
       if (s.status === 'fulfilled') pushAll(s.value);
       else console.warn('[playlist-score-pdf] search fail:', s.reason?.message);
     }
-    if (merged.length < 8) {
+    if (merged.length < 10) {
       try {
         pushAll(await searchDdgImages(q, controller.signal));
       } catch (e) {
@@ -979,11 +1096,11 @@ async function buildSongSlot(song, slotW, slotH) {
       { input: img, top, left },
       { input: Buffer.from(badgeSvg), top: 6, left: 6 },
     ])
-    .jpeg({ quality: 90 })
+    .jpeg({ quality: 93 })
     .toBuffer();
 }
 
-/** 가로 A4 · 왼쪽/오른쪽 각 1곡 */
+/** 가로 A4 · 왼쪽/오른쪽 각 1곡 (페이지당 2곡) */
 async function composePage(songsOnPage) {
   const sharp = require('sharp');
   const slotW = Math.floor((PAGE_W - MARGIN * 2 - GAP) / 2);
@@ -1021,7 +1138,7 @@ async function composePage(songsOnPage) {
     },
   })
     .composite(layers)
-    .jpeg({ quality: 90 })
+    .jpeg({ quality: 93 })
     .toBuffer();
 }
 
