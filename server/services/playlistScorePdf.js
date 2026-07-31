@@ -9,7 +9,7 @@ const YouTube = require('youtube-sr').default;
 const { randomUUID } = require('crypto');
 
 const MAX_SONGS = 24;
-const SEARCH_TIMEOUT_MS = 9000;
+const SEARCH_TIMEOUT_MS = 18000;
 const FETCH_TIMEOUT_MS = 10000;
 /** A4 가로(landscape) ~150dpi — 참고 PDF(오후예배찬양)와 동일 방향 */
 const PAGE_W = 1754;
@@ -345,8 +345,24 @@ function extractSongMeta(raw) {
       /(공식|라이브|커버|피아노|기타|연주|뮤직비디오|자막|가사영상|악보영상)/gi,
       ' ',
     )
+    // "곡명_인도자" 형태에서 인도자 제거
+    .replace(/[_/]\s*[가-힣A-Za-z]+(?:\s*(?:전도사|목사|사모|간사|선생님))?$/u, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // 한/영 병기 제목이면 한글 쪽을 검색 우선
+  if (t.includes('/')) {
+    const parts = t
+      .split('/')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const ko = parts.find((p) => /[가-힣]{2,}/.test(p));
+    const en = parts.find((p) => /[A-Za-z]{3,}/.test(p) && !/[가-힣]/.test(p));
+    if (ko) {
+      t = ko;
+      if (en) bracketTitles.push(en);
+    }
+  }
 
   if ((!t || isLikelyArtistName(t)) && bracketTitles.length > 0) {
     if (!artist && isLikelyArtistName(t)) artist = t;
@@ -391,7 +407,7 @@ async function fetchBuffer(url, referer) {
       Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
     };
     if (referer) headers.Referer = referer;
-    else if (/pstatic\.net|naver\.com|daumcdn|kakaocdn|tistory/i.test(url)) {
+    else if (/pstatic\.net|naver\.com|blogfiles\.naver|daumcdn|kakaocdn|tistory|akbotong/i.test(url)) {
       headers.Referer = 'https://blog.naver.com/';
     }
 
@@ -631,6 +647,10 @@ async function findScoreImageBuffer(metaOrTitle) {
     songTitle ? `${songTitle} 코드 악보` : '',
     songTitle ? `${songTitle} 악보` : '',
     meta.altTitle ? `${meta.altTitle} ${artist} 악보`.trim() : '',
+    // 찬송가 번호가 제목에 없으면 일반 찬송 검색 보강
+    songTitle && /갈길을 밝히|새벽부터 우리|구주 예수 의지/i.test(songTitle)
+      ? `${songTitle} 찬송가 악보`
+      : '',
   ].filter(Boolean);
 
   let candidates = [];
@@ -638,7 +658,7 @@ async function findScoreImageBuffer(metaOrTitle) {
     // eslint-disable-next-line no-await-in-loop
     const found = await searchScoreImages(q);
     candidates.push(...found);
-    if (candidates.length >= 12) break;
+    if (candidates.length >= 24) break;
   }
 
   const seen = new Set();
@@ -657,8 +677,8 @@ async function findScoreImageBuffer(metaOrTitle) {
     .map((c) => ({ ...c, hit: scoreImageCandidate(c, songTitle, artist) }))
     .sort((a, b) => b.hit - a.hit);
 
-  for (const c of ranked.slice(0, 8)) {
-    if (c.hit < 30) continue;
+  for (const c of ranked.slice(0, 14)) {
+    if (c.hit < 22) continue;
     try {
       // eslint-disable-next-line no-await-in-loop
       const buf = await fetchBuffer(c.url, c.source || undefined);
@@ -696,59 +716,195 @@ async function findScoreImageBuffer(metaOrTitle) {
   return { buffer: null, meta: null, scoreFound: false };
 }
 
-/** DuckDuckGo 이미지 검색 → 악보 후보 */
+/** 검색 결과 URL 정리 */
+function normalizeCandidateUrl(url) {
+  let u = upgradeImageUrl(url);
+  if (!u) return '';
+  if (u.startsWith('http://')) u = `https://${u.slice(7)}`;
+  return u
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&');
+}
+
+/** DuckDuckGo 이미지 검색 */
+async function searchDdgImages(query, signal) {
+  const home = await fetch(
+    `https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`,
+    {
+      signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'ko-KR,ko;q=0.9',
+      },
+    },
+  );
+  const html = await home.text();
+  const vqd =
+    (html.match(/vqd=(["']?)([\d-]+)/) ||
+      html.match(/vqd\\":\\"([^\\"]+)/) ||
+      [])[2];
+  if (!vqd) return [];
+
+  const api = `https://duckduckgo.com/i.js?l=kr-kr&o=json&q=${encodeURIComponent(
+    query,
+  )}&vqd=${encodeURIComponent(vqd)}&f=,,,,,&p=1`;
+  const res = await fetch(api, {
+    signal,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Referer: 'https://duckduckgo.com/',
+      Accept: 'application/json,text/javascript,*/*',
+    },
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const results = Array.isArray(data?.results) ? data.results : [];
+  return results
+    .map((r) => ({
+      title: r.title || '',
+      url: normalizeCandidateUrl(r.image || r.thumbnail || ''),
+      thumb: r.thumbnail || '',
+      width: r.width,
+      height: r.height,
+      source: r.url || '',
+      provider: 'ddg',
+    }))
+    .filter((r) => r.url);
+}
+
+/** Bing 이미지(async) — Render에서 DDG가 막힐 때 대비 */
+async function searchBingImages(query, signal) {
+  const url = `https://www.bing.com/images/async?q=${encodeURIComponent(
+    query,
+  )}&first=0&count=35&relp=35&lostate=r&mmasync=1`;
+  const res = await fetch(url, {
+    signal,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
+      Referer: `https://www.bing.com/images/search?q=${encodeURIComponent(query)}`,
+      Accept: 'text/html,*/*',
+    },
+  });
+  if (!res.ok) return [];
+  const html = await res.text();
+  const out = [];
+  const blocks = html.split(/murl&quot;:&quot;/);
+  for (const block of blocks.slice(1, 40)) {
+    const rawUrl = block.split('&quot;')[0] || '';
+    const title =
+      (block.match(/t&quot;:&quot;([\s\S]*?)&quot;/) || [])[1] ||
+      (block.match(/title&quot;:&quot;([\s\S]*?)&quot;/) || [])[1] ||
+      '';
+    const page =
+      (block.match(/purl&quot;:&quot;([\s\S]*?)&quot;/) || [])[1] || '';
+    const img = normalizeCandidateUrl(rawUrl);
+    if (!img) continue;
+    out.push({
+      title: title.replace(/&amp;/g, '&'),
+      url: img,
+      thumb: '',
+      width: 0,
+      height: 0,
+      source: normalizeCandidateUrl(page) || page,
+      provider: 'bing',
+    });
+  }
+  return out;
+}
+
+/** 네이버 이미지 검색 — 한국어 찬양 악보에 강함 */
+async function searchNaverImages(query, signal) {
+  const url = `https://search.naver.com/search.naver?where=image&sm=tab_jum&query=${encodeURIComponent(
+    query,
+  )}`;
+  const res = await fetch(url, {
+    signal,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept-Language': 'ko-KR,ko;q=0.9',
+      Accept: 'text/html,application/xhtml+xml',
+    },
+  });
+  if (!res.ok) return [];
+  const html = await res.text();
+  const out = [];
+  const chunks = html.split('"type":"image"');
+  for (const chunk of chunks.slice(1, 40)) {
+    const title = (chunk.match(/"title":"((?:\\.|[^"\\])*)"/) || [])[1] || '';
+    const link = (chunk.match(/"link":"((?:\\.|[^"\\])*)"/) || [])[1] || '';
+    const originalUrl =
+      (chunk.match(/"originalUrl":"((?:\\.|[^"\\])*)"/) || [])[1] || '';
+    const thumb = (chunk.match(/"thumb":"((?:\\.|[^"\\])*)"/) || [])[1] || '';
+    const w = Number((chunk.match(/"orgWidth":(\d+)/) || [])[1] || 0);
+    const h = Number((chunk.match(/"orgHeight":(\d+)/) || [])[1] || 0);
+    const img = normalizeCandidateUrl(originalUrl || thumb);
+    if (!img) continue;
+    out.push({
+      title: title
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+          String.fromCharCode(parseInt(hex, 16)),
+        )
+        .replace(/\\"/g, '"'),
+      url: img,
+      thumb: normalizeCandidateUrl(thumb),
+      width: w,
+      height: h,
+      source: normalizeCandidateUrl(link) || link,
+      provider: 'naver',
+    });
+  }
+  return out;
+}
+
+/** 이미지 검색 (네이버 → Bing → DDG 폴백) */
 async function searchScoreImages(query) {
   const q = String(query || '').trim();
   if (!q) return [];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
-  try {
-    const home = await fetch(
-      `https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images`,
-      {
-        signal: controller.signal,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'ko-KR,ko;q=0.9',
-        },
-      },
-    );
-    const html = await home.text();
-    const vqd =
-      (html.match(/vqd=(["']?)([\d-]+)/) ||
-        html.match(/vqd\\":\\"([^\\"]+)/) ||
-        [])[2];
-    if (!vqd) return [];
+  const merged = [];
+  const seen = new Set();
+  const pushAll = (list) => {
+    for (const item of list || []) {
+      if (!item?.url || seen.has(item.url)) continue;
+      seen.add(item.url);
+      merged.push(item);
+    }
+  };
 
-    const api = `https://duckduckgo.com/i.js?l=kr-kr&o=json&q=${encodeURIComponent(
-      q,
-    )}&vqd=${encodeURIComponent(vqd)}&f=,,,,,&p=1`;
-    const res = await fetch(api, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Referer: 'https://duckduckgo.com/',
-        Accept: 'application/json,text/javascript,*/*',
-      },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const results = Array.isArray(data?.results) ? data.results : [];
-    return results
-      .map((r) => ({
-        title: r.title || '',
-        url: upgradeImageUrl(r.image || r.thumbnail || ''),
-        thumb: r.thumbnail || '',
-        width: r.width,
-        height: r.height,
-        source: r.url || '',
-      }))
-      .filter((r) => r.url);
+  try {
+    // 네이버+빙을 같이 모아 Render/로컬 모두에서 후보를 확보
+    const settled = await Promise.allSettled([
+      searchNaverImages(q, controller.signal),
+      searchBingImages(q, controller.signal),
+    ]);
+    for (const s of settled) {
+      if (s.status === 'fulfilled') pushAll(s.value);
+      else console.warn('[playlist-score-pdf] search fail:', s.reason?.message);
+    }
+    if (merged.length < 8) {
+      try {
+        pushAll(await searchDdgImages(q, controller.signal));
+      } catch (e) {
+        console.warn('[playlist-score-pdf] ddg search fail:', e.message);
+      }
+    }
+    if (merged.length) {
+      const providers = [...new Set(merged.map((m) => m.provider))].join('+');
+      console.log(
+        `[playlist-score-pdf] search "${q.slice(0, 40)}" → ${merged.length} · ${providers}`,
+      );
+    }
+    return merged;
   } catch {
-    return [];
+    return merged;
   } finally {
     clearTimeout(timer);
   }
