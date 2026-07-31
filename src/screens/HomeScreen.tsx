@@ -213,12 +213,14 @@ export function HomeScreen({ navigation }: Props) {
             variant="ghost"
             disabled={loading}
           />
+          {/* TAB 변환: 임시로 숨김
           <PrimaryButton
             label="TAB 변환"
             onPress={() => navigation.navigate('TabConvert')}
             variant="ghost"
             disabled={loading}
           />
+          */}
         </View>
       }
     >
