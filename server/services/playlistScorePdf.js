@@ -1,6 +1,10 @@
 /**
  * 유튜브 재생목록 → 곡별 악보 이미지 검색 → 한 페이지 2곡 PDF
  */
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { pathToFileURL } = require('url');
 const YouTube = require('youtube-sr').default;
 const { randomUUID } = require('crypto');
 
@@ -15,6 +19,76 @@ const GAP = 18;
 /** PDF 포인트 (A4 landscape) */
 const PDF_PAGE_W = 842;
 const PDF_PAGE_H = 595;
+
+const FONT_DIR = path.join(__dirname, '../assets/fonts');
+const FONT_REG = path.join(FONT_DIR, 'NotoSansKR-Regular.otf');
+const FONT_BOLD = path.join(FONT_DIR, 'NotoSansKR-Bold.otf');
+
+/** fontconfig(~/.fonts)에도 복사 — Render Linux SVG 텍스트용 */
+function ensureFontsRegistered() {
+  try {
+    const homeFonts = path.join(os.homedir(), '.fonts');
+    fs.mkdirSync(homeFonts, { recursive: true });
+    for (const src of [FONT_REG, FONT_BOLD]) {
+      if (!fs.existsSync(src)) continue;
+      const dest = path.join(homeFonts, path.basename(src));
+      if (
+        !fs.existsSync(dest) ||
+        fs.statSync(dest).size !== fs.statSync(src).size
+      ) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+  } catch (err) {
+    console.warn('[playlist-score-pdf] 폰트 등록 실패:', err.message);
+  }
+}
+ensureFontsRegistered();
+
+/** SVG @font-face (file://) — 용량 큰 base64 대신 디스크 참조 */
+let cachedFontCss = null;
+function koreanFontCss() {
+  if (cachedFontCss != null) return cachedFontCss;
+  const faces = [];
+  try {
+    if (fs.existsSync(FONT_REG)) {
+      faces.push(
+        `@font-face{font-family:'NotoSansKR';src:url('${pathToFileURL(FONT_REG).href}');font-weight:400;font-style:normal;}`,
+      );
+    }
+    if (fs.existsSync(FONT_BOLD)) {
+      faces.push(
+        `@font-face{font-family:'NotoSansKR';src:url('${pathToFileURL(FONT_BOLD).href}');font-weight:700;font-style:normal;}`,
+      );
+    }
+  } catch (err) {
+    console.warn('[playlist-score-pdf] 폰트 CSS 실패:', err.message);
+  }
+  cachedFontCss = faces.join('\n');
+  if (!cachedFontCss) {
+    console.warn(
+      '[playlist-score-pdf] 한글 폰트 없음 — placeholder 글자가 깨질 수 있습니다',
+    );
+  } else {
+    console.log('[playlist-score-pdf] 한글 폰트 준비 완료');
+  }
+  return cachedFontCss;
+}
+
+/** 한글 안전 SVG 래퍼 */
+function wrapSvg(width, height, body) {
+  const css = koreanFontCss();
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <style type="text/css"><![CDATA[
+${css}
+text { font-family: 'NotoSansKR', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
+]]></style>
+  </defs>
+${body}
+</svg>`;
+}
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -685,15 +759,17 @@ async function renderPlaceholderCard(song, slotW, slotH) {
   const sharp = require('sharp');
   const title = escapeXml(song.title || '제목 없음');
   const sub = escapeXml(song.channel || song.videoTitle || '');
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${slotW}" height="${slotH}" viewBox="0 0 ${slotW} ${slotH}">
+  const svg = wrapSvg(
+    slotW,
+    slotH,
+    `
   <rect width="100%" height="100%" fill="#ffffff"/>
   <rect x="16" y="16" width="${slotW - 32}" height="${slotH - 32}" fill="none" stroke="#CCCCCC" stroke-width="2"/>
   <text x="${slotW / 2}" y="${slotH * 0.42}" text-anchor="middle" font-size="56" fill="#999999">𝄞</text>
-  <text x="${slotW / 2}" y="${slotH * 0.55}" text-anchor="middle" font-family="Noto Serif KR, Batang, Georgia, serif" font-size="28" font-weight="700" fill="#333333">${title}</text>
-  <text x="${slotW / 2}" y="${slotH * 0.62}" text-anchor="middle" font-family="Noto Sans KR, Malgun Gothic, sans-serif" font-size="16" fill="#777777">${sub}</text>
-  <text x="${slotW / 2}" y="${slotH * 0.74}" text-anchor="middle" font-family="Noto Sans KR, Malgun Gothic, sans-serif" font-size="15" fill="#999999">악보 이미지를 찾지 못했습니다</text>
-</svg>`;
+  <text x="${slotW / 2}" y="${slotH * 0.55}" text-anchor="middle" font-size="28" font-weight="700" fill="#333333">${title}</text>
+  <text x="${slotW / 2}" y="${slotH * 0.62}" text-anchor="middle" font-size="16" fill="#777777">${sub}</text>
+  <text x="${slotW / 2}" y="${slotH * 0.74}" text-anchor="middle" font-size="15" fill="#999999">악보 이미지를 찾지 못했습니다</text>`,
+  );
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
@@ -727,11 +803,13 @@ async function buildSongSlot(song, slotW, slotH) {
 
   const num = String(song.index || '');
   const badgeR = 22;
-  const badgeSvg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="${badgeR * 2 + 4}" height="${badgeR * 2 + 4}">
+  const badgeSvg = wrapSvg(
+    badgeR * 2 + 4,
+    badgeR * 2 + 4,
+    `
   <circle cx="${badgeR + 2}" cy="${badgeR + 2}" r="${badgeR}" fill="none" stroke="#D32F2F" stroke-width="3"/>
-  <text x="${badgeR + 2}" y="${badgeR + 9}" text-anchor="middle" font-family="Noto Sans KR, Malgun Gothic, sans-serif" font-size="26" font-weight="700" fill="#D32F2F">${escapeXml(num)}</text>
-</svg>`;
+  <text x="${badgeR + 2}" y="${badgeR + 9}" text-anchor="middle" font-size="26" font-weight="700" fill="#D32F2F">${escapeXml(num)}</text>`,
+  );
 
   return sharp({
     create: {

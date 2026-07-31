@@ -91,7 +91,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'playlist-pdf-async-v2-20260731',
+    version: 'playlist-pdf-kr-font-v1-20260731',
   });
 });
 

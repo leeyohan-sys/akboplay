@@ -34,6 +34,11 @@ yarn-error.*
 .env*.local
 server/.env
 
+# 빌드 시 받는 한글 폰트 (용량 큼)
+server/assets/fonts/*.otf
+server/assets/fonts/*.ttf
+server/assets/fonts/*.woff*
+
 # typescript
 *.tsbuildinfo
 
