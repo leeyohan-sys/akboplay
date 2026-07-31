@@ -537,6 +537,13 @@ function scoreImageCandidate(img, songTitle, artist = '') {
   ) {
     score -= 40;
   }
+  // 흰 배경·인쇄용 표현 가산 / 어두운·빈티지 감점
+  if (/흰\s*배경|화이트|인쇄용|고화질|clean|white\s*bg/i.test(`${title} ${page}`)) {
+    score += 12;
+  }
+  if (/어두운|블랙|black\s*bg|night|세피아|빈티지|크로마/i.test(`${title} ${page}`)) {
+    score -= 20;
+  }
 
   if (
     /blog\.naver|postfiles\.pstatic|mblogthumb|blogthumb\.pstatic|tistory|kakaocdn|daumcdn|mymusicsheet|worshipmusic|akbobada|cinfonet|akbotong/i.test(
@@ -643,6 +650,29 @@ async function assessImageClarity(buf) {
     if (rowDark / w > 0.35 && rowDark / w < 0.85) staffish += 1;
   }
 
+  // 배경(밝은 픽셀) 밝기 — 흰색 용지 악보 선호
+  const samples = [];
+  const step = Math.max(1, Math.floor(n / 6000));
+  for (let i = 0; i < n; i += step) samples.push(data[i]);
+  samples.sort((a, b) => a - b);
+  const p50 = samples[Math.floor(samples.length * 0.5)] || 0;
+  const p85 = samples[Math.floor(samples.length * 0.85)] || 0;
+  const bright = samples.filter((v) => v >= p50);
+  const paper =
+    bright.reduce((a, b) => a + b, 0) / Math.max(1, bright.length);
+
+  // 전체적으로 어두운 배경(회색·밤·스캔 그림자)은 탈락
+  if (paper < 168) {
+    return {
+      ok: false,
+      reason: 'dark-background',
+      score: paper,
+      paper,
+      p85,
+      staffish,
+    };
+  }
+
   return {
     ok: true,
     reason: 'ok',
@@ -651,7 +681,66 @@ async function assessImageClarity(buf) {
     botEdge,
     darkRatio,
     staffish,
+    paper,
+    p85,
   };
+}
+
+/**
+ * 크림/회색 용지 배경을 흰색에 가깝게 맞춤 (오선·음표는 유지)
+ */
+async function whitenScoreBackground(buf) {
+  const sharp = require('sharp');
+  const { data, info } = await sharp(buf)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  const n = w * h;
+  const gray = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 3;
+    gray[i] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
+  }
+
+  // 밝은 쪽(용지) / 어두운 쪽(잉크) 기준점
+  const samples = [];
+  const step = Math.max(1, Math.floor(n / 8000));
+  for (let i = 0; i < n; i += step) samples.push(gray[i]);
+  samples.sort((a, b) => a - b);
+  const blackPoint = Math.min(
+    70,
+    Math.max(18, samples[Math.floor(samples.length * 0.08)] || 30),
+  );
+  const paperPoint = Math.max(
+    blackPoint + 40,
+    samples[Math.floor(samples.length * 0.88)] || 220,
+  );
+
+  // 이미 충분히 흰면 그대로
+  if (paperPoint >= 248) {
+    return sharp(buf).png().toBuffer();
+  }
+
+  const span = Math.max(1, paperPoint - blackPoint);
+  const out = Buffer.alloc(n * 3);
+  for (let i = 0; i < n; i++) {
+    const o = i * 3;
+    // 채널별 레벨 스트레치 → 용지=255, 잉크는 상대 유지
+    for (let c = 0; c < 3; c++) {
+      const v = data[o + c];
+      const stretched = ((v - blackPoint) / span) * 255;
+      out[o + c] = Math.max(0, Math.min(255, Math.round(stretched)));
+    }
+  }
+
+  return sharp(out, {
+    raw: { width: w, height: h, channels: 3 },
+  })
+    .png()
+    .toBuffer();
 }
 
 /** 메타/URL만으로 바로 스킵할지 */
@@ -685,7 +774,8 @@ async function findScoreImageBuffer(metaOrTitle) {
     songTitle && artist ? `${songTitle} ${artist} 악보` : '',
     songTitle ? `${songTitle} 단선 악보` : '',
     songTitle ? `${songTitle} 코드 악보` : '',
-    songTitle ? `${songTitle} 악보` : '',
+    songTitle ? `${songTitle} 인쇄용 악보` : '',
+    songTitle ? `${songTitle} 흰배경 악보` : '',
     meta.altTitle ? `${meta.altTitle} ${artist} 악보`.trim() : '',
     songTitle && /갈길을 밝히|새벽부터 우리|구주 예수 의지/i.test(songTitle)
       ? `${songTitle} 찬송가 악보`
@@ -742,6 +832,13 @@ async function findScoreImageBuffer(metaOrTitle) {
       // 오선이 거의 없으면(사진·썸네일) 한 곡 전체 악보로 보기 어려움
       if ((clarity.staffish || 0) < 2 && c.hit < 85) continue;
 
+      const paper = Number(clarity.paper) || 0;
+      // 회색·어두운 용지는 가능하면 건너뛰고 더 흰 후보 선호
+      if (paper < 195 && c.hit < 95) continue;
+
+      // eslint-disable-next-line no-await-in-loop
+      const whitened = await whitenScoreBackground(buf);
+
       const area = imgMeta.width * imgMeta.height;
       const portraitBonus =
         imgMeta.height / imgMeta.width >= 1.15
@@ -749,15 +846,18 @@ async function findScoreImageBuffer(metaOrTitle) {
           : imgMeta.height / imgMeta.width >= 1.0
             ? 8
             : 0;
+      const whiteBonus =
+        paper >= 235 ? 30 : paper >= 220 ? 18 : paper >= 205 ? 6 : -20;
       const fitness =
         c.hit +
         portraitBonus +
+        whiteBonus +
         Math.min(35, Math.floor(area / 45000)) +
         Math.min(24, (clarity.staffish || 0) * 2);
 
       if (!best || fitness > best.fitness) {
         best = {
-          buffer: buf,
+          buffer: whitened,
           meta: {
             title: c.title,
             url: c.url,
@@ -765,14 +865,21 @@ async function findScoreImageBuffer(metaOrTitle) {
             hit: c.hit,
             fitness,
             clarity: clarity.reason,
+            paper,
             provider: c.provider,
           },
           scoreFound: true,
           fitness,
         };
       }
-      // 충분히 좋은 전체 악보면 조기 종료
-      if (fitness >= 120 && (clarity.staffish || 0) >= 6) break;
+      // 충분히 좋은 흰 배경 전체 악보면 조기 종료
+      if (
+        fitness >= 130 &&
+        (clarity.staffish || 0) >= 6 &&
+        paper >= 220
+      ) {
+        break;
+      }
     } catch {
       /* next */
     }
