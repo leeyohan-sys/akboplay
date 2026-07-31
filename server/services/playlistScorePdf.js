@@ -453,7 +453,7 @@ function upgradeImageUrl(url) {
   return u;
 }
 
-function scoreImageCandidate(img, songTitle, artist = '') {
+function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
   const title = String(img?.title || '');
   const page = String(img?.source || img?.page || '');
   const url = String(img?.url || '');
@@ -461,6 +461,8 @@ function scoreImageCandidate(img, songTitle, artist = '') {
   const st = String(songTitle || '')
     .toLowerCase()
     .replace(/\s+/g, '');
+  const isHymn = Boolean(opts.isHymn);
+  const hymnNo = String(opts.hymnNo || '');
   let score = 0;
 
   // 미리보기·유료 워터마크 후보 강하게 배제
@@ -491,8 +493,27 @@ function scoreImageCandidate(img, songTitle, artist = '') {
 
   if (/악보|코드악보|가사악보|피아노악보|sheet|chord|단선/.test(title)) score += 45;
   if (/ppt/i.test(title) && /악보/.test(title)) score += 8;
-  // 새찬송가 번호가 제목에 있으면 한 곡 전체 악보 가능성 ↑
-  if (/찬송가\s*\d{2,3}\s*장|새찬송가\s*\d{2,3}/i.test(title)) score += 20;
+
+  // 찬송가: 새찬송가/통일찬송가 버전만 강하게 선호
+  if (isHymn) {
+    const ccmArranged =
+      /예람|피아|welove|위러브|마커스|토브|워십|ccm|코드\s*악보|[A-G]b?\s*코드|편곡|상상건반/i.test(
+        title,
+      );
+    const hymnBook =
+      /새찬송가|통일찬송가/i.test(`${title} ${page}`) ||
+      (/찬송가\s*\d{2,3}\s*장/i.test(`${title} ${page}`) && !ccmArranged);
+    if (hymnBook) score += 70;
+    if (hymnNo && new RegExp(`${hymnNo}\\s*장`).test(`${title} ${page}`)) {
+      score += 50;
+    }
+    // CCM·워십 편곡/코드 악보는 찬송가 버전으로 보지 않음
+    if (ccmArranged && !/새찬송가|통일찬송가/i.test(title)) {
+      score -= 80;
+    }
+  } else if (/찬송가\s*\d{2,3}\s*장|새찬송가\s*\d{2,3}/i.test(title)) {
+    score += 20;
+  }
 
   // 곡명 일치가 핵심
   if (st.length >= 2) {
@@ -510,7 +531,7 @@ function scoreImageCandidate(img, songTitle, artist = '') {
     }
   }
 
-  if (artist) {
+  if (artist && !isHymn) {
     const a = String(artist).toLowerCase().replace(/\s+/g, '');
     if (a && blob.includes(a)) score += 18;
     if (/welove/i.test(artist) && /위러브|welove/i.test(`${title} ${page}`)) {
@@ -536,7 +557,7 @@ function scoreImageCandidate(img, songTitle, artist = '') {
       `${title} ${page}`,
     )
   ) {
-    score += 28;
+    score += isHymn ? 10 : 28;
   }
   // 일부·미리보기·잘린 이미지는 감점
   if (
@@ -753,7 +774,7 @@ async function whitenScoreBackground(buf) {
 }
 
 /** 메타/URL만으로 바로 스킵할지 */
-function shouldSkipCandidate(c) {
+function shouldSkipCandidate(c, opts = {}) {
   const t = `${c.title || ''} ${c.source || ''} ${c.url || ''}`;
   if (/preview-v2|legal\s*use\s*requires\s*purchase/i.test(t)) return true;
   if (/cdn\.mapianist\.com\/preview/i.test(c.url || '')) return true;
@@ -773,6 +794,15 @@ function shouldSkipCandidate(c) {
   ) {
     return true;
   }
+  // 찬송가 곡: CCM·워십 편곡은 제외 (새찬송가/통일찬송가만)
+  if (opts.isHymn) {
+    const official = /새찬송가|통일찬송가/i.test(c.title || '');
+    const ccm =
+      /예람|피아|welove|위러브|마커스|토브|워십|코드\s*악보|[A-G]b?\s*코드|편곡|상상건반/i.test(
+        c.title || '',
+      );
+    if (ccm && !official) return true;
+  }
   return false;
 }
 
@@ -786,6 +816,24 @@ function hymnNumberHint(title) {
   return '';
 }
 
+/** 영상 제목 등에서 찬송가 여부·장 번호 추출 */
+function resolveHymnInfo(meta) {
+  const title = String(meta?.title || '');
+  const videoTitle = String(meta?.videoTitle || '');
+  const blob = `${title} ${videoTitle}`;
+  let hymnNo = hymnNumberHint(title);
+  if (!hymnNo) {
+    const m =
+      blob.match(/(?:새)?찬송가\s*(\d{2,3})\s*장/) ||
+      blob.match(/(\d{2,3})\s*장/);
+    if (m) hymnNo = m[1];
+  }
+  const isHymn =
+    Boolean(hymnNo) ||
+    /찬송가|새찬송가|통일찬송가|찬송가랑/i.test(blob);
+  return { hymnNo, isHymn };
+}
+
 /** 곡 메타로 악보 이미지 버퍼 확보 */
 async function findScoreImageBuffer(metaOrTitle) {
   const meta =
@@ -794,23 +842,30 @@ async function findScoreImageBuffer(metaOrTitle) {
       : metaOrTitle || {};
   const songTitle = meta.title || '';
   const artist = meta.artist || '';
-  const hymnNo = hymnNumberHint(songTitle);
-  const queries = [
-    hymnNo ? `찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
-    hymnNo ? `새찬송가 ${hymnNo}장 ${songTitle}` : '',
-    meta.searchQuery,
-    songTitle && artist ? `${songTitle} ${artist} 전체 악보` : '',
-    songTitle ? `${songTitle} 가사 악보` : '',
-    songTitle && artist ? `${songTitle} ${artist} 악보` : '',
-    songTitle ? `${songTitle} 단선 악보` : '',
-    songTitle ? `${songTitle} 코드 악보` : '',
-    songTitle ? `${songTitle} 인쇄용 악보` : '',
-    songTitle ? `${songTitle} 흰배경 악보` : '',
-    meta.altTitle ? `${meta.altTitle} ${artist} 악보`.trim() : '',
-    songTitle && /갈길을 밝히|새벽부터 우리|구주 예수 의지/i.test(songTitle)
-      ? `${songTitle} 찬송가 악보`
-      : '',
-  ].filter(Boolean);
+  const { hymnNo, isHymn } = resolveHymnInfo(meta);
+
+  // 찬송가: 새찬송가/찬송가 장 번호 버전만 우선 검색
+  const queries = isHymn
+    ? [
+        hymnNo ? `새찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
+        hymnNo ? `찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
+        hymnNo ? `새찬송가 ${hymnNo}장 악보` : '',
+        hymnNo ? `통일찬송가 ${hymnNo}장 ${songTitle}` : '',
+        `${songTitle} 새찬송가 악보`,
+        `${songTitle} 찬송가 악보`,
+        hymnNo ? `찬송가 ${hymnNo}장 가사 악보` : '',
+      ].filter(Boolean)
+    : [
+        meta.searchQuery,
+        songTitle && artist ? `${songTitle} ${artist} 전체 악보` : '',
+        songTitle ? `${songTitle} 가사 악보` : '',
+        songTitle && artist ? `${songTitle} ${artist} 악보` : '',
+        songTitle ? `${songTitle} 단선 악보` : '',
+        songTitle ? `${songTitle} 코드 악보` : '',
+        songTitle ? `${songTitle} 인쇄용 악보` : '',
+        songTitle ? `${songTitle} 흰배경 악보` : '',
+        meta.altTitle ? `${meta.altTitle} ${artist} 악보`.trim() : '',
+      ].filter(Boolean);
 
   let candidates = [];
   for (const q of queries) {
@@ -823,7 +878,7 @@ async function findScoreImageBuffer(metaOrTitle) {
   const seen = new Set();
   candidates = candidates.filter((c) => {
     if (!c.url || seen.has(c.url)) return false;
-    if (shouldSkipCandidate(c)) return false;
+    if (shouldSkipCandidate(c, { isHymn, hymnNo })) return false;
     seen.add(c.url);
     return true;
   });
@@ -833,7 +888,10 @@ async function findScoreImageBuffer(metaOrTitle) {
   }
 
   const ranked = candidates
-    .map((c) => ({ ...c, hit: scoreImageCandidate(c, songTitle, artist) }))
+    .map((c) => ({
+      ...c,
+      hit: scoreImageCandidate(c, songTitle, artist, { isHymn, hymnNo }),
+    }))
     .sort((a, b) => b.hit - a.hit);
 
   // 첫 통과가 아니라, 한 곡 전체가 보이는 선명한 악보를 고름
@@ -886,10 +944,18 @@ async function findScoreImageBuffer(metaOrTitle) {
             : 0;
       const whiteBonus =
         paper >= 235 ? 30 : paper >= 220 ? 18 : paper >= 205 ? 6 : -20;
+      const hymnBookBonus = isHymn
+        ? /새찬송가|통일찬송가/i.test(c.title || '') ||
+          (/찬송가\s*\d{2,3}\s*장/i.test(c.title || '') &&
+            !/예람|피아|코드|편곡|워십/i.test(c.title || ''))
+          ? 45
+          : -40
+        : 0;
       const fitness =
         c.hit +
         portraitBonus +
         whiteBonus +
+        hymnBookBonus +
         Math.min(35, Math.floor(area / 45000)) +
         Math.min(24, (clarity.staffish || 0) * 2);
 
@@ -905,16 +971,23 @@ async function findScoreImageBuffer(metaOrTitle) {
             clarity: clarity.reason,
             paper,
             provider: c.provider,
+            hymnNo: hymnNo || undefined,
           },
           scoreFound: true,
           fitness,
         };
       }
       // 충분히 좋은 흰 배경 전체 악보면 조기 종료
+      const hymnOk =
+        !isHymn ||
+        /새찬송가|통일찬송가/i.test(c.title || '') ||
+        (/찬송가\s*\d{2,3}\s*장/i.test(c.title || '') &&
+          !/예람|피아|코드|편곡|워십/i.test(c.title || ''));
       if (
         fitness >= 130 &&
         (clarity.staffish || 0) >= 6 &&
-        paper >= 220
+        paper >= 220 &&
+        hymnOk
       ) {
         break;
       }
@@ -1457,7 +1530,10 @@ async function buildPlaylistScorePdf(playlistUrl, opts = {}) {
     });
 
     try {
-      found = await findScoreImageBuffer(meta);
+      found = await findScoreImageBuffer({
+        ...meta,
+        videoTitle: video.title || '',
+      });
       if (found.scoreFound && found.buffer) {
         imageBuffer = found.buffer;
         scoreFound = true;
