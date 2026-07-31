@@ -447,6 +447,19 @@ async function fetchBuffer(url, referer) {
     const buf = Buffer.from(ab);
     if (buf.length < 4000) throw new Error('too small');
     return buf;
+  } catch (err) {
+    // https 실패 시 네이버 블로그 원본은 http로 재시도
+    const msg = String(err?.message || err);
+    if (
+      /^https:\/\//i.test(url) &&
+      /blogfiles\.naver\.net|postfiles\d*\.pstatic\.net/i.test(url) &&
+      /fetch failed|ECONN|certificate|SSL|TLS|aborted/i.test(msg)
+    ) {
+      const httpUrl = `http://${url.slice(8)}`;
+      clearTimeout(timer);
+      return fetchBuffer(httpUrl, referer);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -537,23 +550,88 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
     score += 20;
   }
 
-  // 곡명 일치가 핵심
-  if (st.length >= 2) {
-    if (blob.includes(st)) score += 40;
-    else if (st.length >= 4) {
-      let hits = 0;
-      for (let i = 0; i <= st.length - 3; i++) {
-        if (blob.includes(st.slice(i, i + 3))) hits += 1;
-      }
-      const ratio = hits / Math.max(1, st.length - 2);
-      if (ratio >= 0.5) score += 18;
-      else score -= 45;
-    } else {
-      score -= 50;
+  // 곡명 일치 — 한글/영문 분리 매칭 (한영 병기 제목 대응)
+  const hangul = String(songTitle || '')
+    .replace(/[^가-힣\s]/g, ' ')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  const latin = String(songTitle || '')
+    .replace(/[^A-Za-z\s]/g, ' ')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  const artistKey = String(artist || '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  let titleHit = false;
+  if (st.length >= 2 && blob.includes(st)) {
+    score += 40;
+    titleHit = true;
+  } else {
+    const hangulHit = hangul.length >= 2 && blob.includes(hangul);
+    const latinHit = latin.length >= 4 && blob.includes(latin);
+    if (hangulHit && latinHit) {
+      // 한영 모두 일치 — CCM 한영 병기 곡
+      score += 48;
+      titleHit = true;
+    } else if (latinHit) {
+      score += 30;
+      titleHit = true;
+    } else if (hangulHit && latin.length >= 4) {
+      // 한글만 맞고 영문 곡명(GrowingCloser 등)이 없으면 동명곡 오탐 → 강한 감점
+      score -= 45;
+    } else if (hangulHit) {
+      score += 38;
+      titleHit = true;
     }
+    if (!titleHit && hangul.length >= 2) {
+      let hits = 0;
+      for (let i = 0; i <= hangul.length - 2; i++) {
+        if (blob.includes(hangul.slice(i, i + 2))) hits += 1;
+      }
+      const ratio = hits / Math.max(1, hangul.length - 1);
+      if (ratio >= 0.55) {
+        score += latin.length >= 4 ? 8 : 22;
+        titleHit = latin.length < 4;
+      }
+    }
+    if (!titleHit) score -= 35;
+  }
+  // 알려진 워십팀명이 후보에 있으면 가산 (동명곡·다른 편곡 구분)
+  const artistBlobHit = (() => {
+    if (artistKey.length >= 2 && blob.includes(artistKey)) return true;
+    // 팀명 별칭 (FIA ↔ 피아워십 등)
+    if (/피아|fia/i.test(artistKey) && /fia|피아|f\.?\s*i\.?\s*a/i.test(blob)) {
+      return true;
+    }
+    if (/예람|yeram/i.test(artistKey) && /예람|yeram/i.test(blob)) return true;
+    if (/welove|위러브/i.test(artistKey) && /welove|위러브/i.test(blob)) {
+      return true;
+    }
+    if (/마커스|marcus/i.test(artistKey) && /마커스|marcus/i.test(blob)) {
+      return true;
+    }
+    return false;
+  })();
+  if (artistBlobHit) {
+    score += 40;
+  } else if (
+    artistKey.length >= 2 &&
+    /예람|welove|위러브|피아|fia|마커스|yeram/i.test(artistKey) &&
+    /김연우|아이유|성시경|버스커|악동/i.test(`${title} ${page}`)
+  ) {
+    // 유명 대중곡 아티스트면 감점
+    score -= 50;
   }
 
-  // 워십팀/아티스트명은 매칭 점수에 반영하지 않음 — 곡명·찬송가 버전 우선
+  // MR·반주 음원 페이지는 악보가 아님
+  if (/\bMR\b|반주\s*음원|inst(?:rumental)?\b/i.test(title) && !/악보|sheet|chord/i.test(title)) {
+    score -= 60;
+  }
+
+  // 검색 소스 우선순위: 네이버 > 구글 > 빙
+  if (img.provider === 'naver') score += 12;
+  else if (img.provider === 'google') score += 8;
+  else if (img.provider === 'bing') score += 3;
 
   const w = Number(img.width) || 0;
   const h = Number(img.height) || 0;
@@ -598,7 +676,6 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
   ) {
     score += 18;
   }
-  if (img.provider === 'google') score += 6;
   // 유튜브 썸네일은 한 곡 전체 악보가 아님
   if (/youtube\.com|ytimg\.com|i\.ytimg\.com|pinterest|facebook\.com|lookaside\.fbsbx/i.test(url)) {
     score -= 55;
@@ -619,7 +696,7 @@ async function assessImageClarity(buf) {
   const meta = await sharp(buf).metadata();
   const w0 = meta.width || 0;
   const h0 = meta.height || 0;
-  if (w0 < 280 || h0 < 360) {
+  if (w0 < 220 || h0 < 280) {
     return { ok: false, reason: 'too-small', score: 0 };
   }
 
@@ -805,6 +882,8 @@ function shouldSkipCandidate(c, opts = {}) {
   if (/ytimg\.com|i\.ytimg\.com|img\.youtube\.com/i.test(c.url || '')) return true;
   // PPT/슬라이드 악보는 한 장에 곡 일부가 잘리는 경우가 많음
   if (/\bPPT\b|피피티|슬라이드|powerpoint/i.test(c.title || '')) return true;
+  // MR·반주 음원은 악보 이미지가 아님
+  if (/\bMR\b|반주\s*음원/i.test(c.title || '')) return true;
   if (
     /상상건반/i.test(c.title || '') &&
     /편곡|PPT|피피티/i.test(c.title || '')
@@ -870,24 +949,40 @@ async function findScoreImageBuffer(metaOrTitle) {
 
   // 찬송가: 새찬송가/찬송가 장 번호 버전만 우선 검색
   // 일반곡: 곡명(+악보)만 검색 — 워십팀명은 넣지 않음
+  const hangulTitle = String(songTitle || '')
+    .replace(/[^가-힣\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const latinOnly = String(songTitle || '')
+    .replace(/[^A-Za-z\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const queries = isHymn
     ? [
-        hymnNo ? `새찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
-        hymnNo ? `찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
+        hymnNo ? `새찬송가 ${hymnNo}장 ${hangulTitle || songTitle} 악보` : '',
+        hymnNo ? `찬송가 ${hymnNo}장 ${hangulTitle || songTitle} 악보` : '',
         hymnNo ? `새찬송가 ${hymnNo}장 악보` : '',
-        hymnNo ? `통일찬송가 ${hymnNo}장 ${songTitle}` : '',
-        `${songTitle} 새찬송가 악보`,
-        `${songTitle} 찬송가 악보`,
+        hymnNo ? `통일찬송가 ${hymnNo}장 ${hangulTitle || songTitle}` : '',
+        `${hangulTitle || songTitle} 새찬송가 악보`,
+        `${hangulTitle || songTitle} 찬송가 악보`,
         hymnNo ? `찬송가 ${hymnNo}장 가사 악보` : '',
       ].filter(Boolean)
     : [
+        // CCM: 팀명 포함 쿼리를 앞에 두어 동명곡(김연우 등)보다 워십 악보 우선
+        artist && songTitle ? `${songTitle} ${artist} 악보` : '',
+        artist && hangulTitle ? `${hangulTitle} ${artist} 악보` : '',
         songTitle ? `${songTitle} 악보` : '',
+        hangulTitle && latinOnly.length >= 3
+          ? `${hangulTitle} ${latinOnly} 악보`
+          : '',
+        hangulTitle && hangulTitle !== songTitle
+          ? `${hangulTitle} 악보`
+          : '',
         meta.searchQuery,
-        songTitle ? `${songTitle} 가사 악보` : '',
-        songTitle ? `${songTitle} 단선 악보` : '',
+        hangulTitle ? `${hangulTitle} 가사 악보` : '',
+        hangulTitle ? `${hangulTitle} 단선 악보` : '',
+        hangulTitle ? `${hangulTitle} 코드 악보` : '',
         songTitle ? `${songTitle} 코드 악보` : '',
-        songTitle ? `${songTitle} 전체 악보` : '',
-        songTitle ? `${songTitle} 인쇄용 악보` : '',
         meta.altTitle ? `${meta.altTitle} 악보` : '',
       ].filter(Boolean);
 
@@ -905,6 +1000,13 @@ async function findScoreImageBuffer(metaOrTitle) {
 
     for (const c of ranked.slice(0, MAX_CANDIDATES_TO_TRY)) {
       if (c.hit < 22) continue;
+      // 찬송가는 찬송가/새찬송가 표기가 있는 후보만
+      if (
+        isHymn &&
+        !/새찬송가|통일찬송가|찬송가\s*\d{2,3}\s*장/i.test(c.title || '')
+      ) {
+        continue;
+      }
       try {
         // eslint-disable-next-line no-await-in-loop
         let buf = await fetchBuffer(c.url, c.source || undefined);
@@ -914,12 +1016,15 @@ async function findScoreImageBuffer(metaOrTitle) {
         // eslint-disable-next-line no-await-in-loop
         const imgMeta = await sharp(buf).metadata();
         if (!imgMeta.width || !imgMeta.height) continue;
-        if (imgMeta.width / imgMeta.height > 1.45 && c.hit < 60) continue;
-        if (imgMeta.height < 400 && c.hit < 70) continue;
+        // 일반 CCM은 가로형·짧은 이미지도 허용폭을 조금 넓힘
+        if (imgMeta.width / imgMeta.height > 1.55 && c.hit < (isHymn ? 60 : 45)) {
+          continue;
+        }
+        if (imgMeta.height < (isHymn ? 400 : 320) && c.hit < 70) continue;
         if (
           imgMeta.width >= imgMeta.height &&
-          imgMeta.height < 700 &&
-          c.hit < 110
+          imgMeta.height < (isHymn ? 700 : 480) &&
+          c.hit < (isHymn ? 110 : 70)
         ) {
           continue;
         }
@@ -932,10 +1037,10 @@ async function findScoreImageBuffer(metaOrTitle) {
           );
           continue;
         }
-        if ((clarity.staffish || 0) < 2 && c.hit < 85) continue;
+        if ((clarity.staffish || 0) < 1 && c.hit < 85) continue;
 
         const paper = Number(clarity.paper) || 0;
-        if (paper < 195 && c.hit < 95) continue;
+        if (paper < (isHymn ? 195 : 175) && c.hit < 95) continue;
 
         const area = imgMeta.width * imgMeta.height;
         const portraitBonus =
@@ -1007,23 +1112,31 @@ async function findScoreImageBuffer(metaOrTitle) {
     return Boolean(best && best.fitness >= 130);
   }
 
-  // 쿼리별로 검색→평가. 좋은 결과가 없으면 다음 쿼리 계속
-  for (const q of queries) {
-    // eslint-disable-next-line no-await-in-loop
-    const found = await searchScoreImages(q);
-    const batch = [];
-    for (const c of found) {
-      if (!c.url || seen.has(c.url)) continue;
-      if (shouldSkipCandidate(c, { isHymn, hymnNo })) continue;
-      seen.add(c.url);
-      batch.push(c);
+  // 쿼리×검색엔진 순차: 네이버 → 구글 → Bing. 좋은 후보 있으면 이후 스킵
+  const providerChain = [
+    { name: 'naver', run: searchNaverImages },
+    { name: 'google', run: searchGoogleImages },
+    { name: 'bing', run: searchBingImages },
+  ];
+
+  outer: for (const q of queries) {
+    for (const p of providerChain) {
+      // eslint-disable-next-line no-await-in-loop
+      const found = await searchScoreImages(q, { providers: [p] });
+      const batch = [];
+      for (const c of found) {
+        if (!c.url || seen.has(c.url)) continue;
+        if (shouldSkipCandidate(c, { isHymn, hymnNo })) continue;
+        seen.add(c.url);
+        batch.push(c);
+      }
+      if (batch.length === 0) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const goodEnough = await evaluateCandidates(batch);
+      if (goodEnough) break outer;
     }
-    if (batch.length === 0) continue;
-    // eslint-disable-next-line no-await-in-loop
-    const goodEnough = await evaluateCandidates(batch);
-    if (goodEnough) break;
-    // 이미 쓸 만한 후보가 있으면 CCM은 추가 검색 생략
-    if (best && !isHymn && best.fitness >= 100) break;
+    // 이미 쓸 만한 후보가 있으면 추가 쿼리 생략
+    if (best && best.fitness >= (isHymn ? 130 : 110)) break;
   }
 
   if (best) {
@@ -1049,7 +1162,14 @@ async function findScoreImageBuffer(metaOrTitle) {
 function normalizeCandidateUrl(url) {
   let u = upgradeImageUrl(url);
   if (!u) return '';
-  if (u.startsWith('http://')) u = `https://${u.slice(7)}`;
+  // blogfiles.naver.net 은 https 핸드셰이크가 실패하는 경우가 많음 → http 유지
+  const keepHttp =
+    /^http:\/\/(?:[^/]*\.)?(?:blogfiles\.naver\.net|postfiles\d*\.pstatic\.net|blogfiles\.pstatic\.net)/i.test(
+      u,
+    );
+  if (!keepHttp && u.startsWith('http://')) {
+    u = `https://${u.slice(7)}`;
+  }
   return u
     .replace(/\\u0026/gi, '&')
     .replace(/\\\//g, '/')
@@ -1235,8 +1355,8 @@ async function searchGoogleImages(query, signal) {
     .filter((r) => r.url);
 }
 
-/** 이미지 검색 (네이버 + Bing + Google, DDG 폴백) */
-async function searchScoreImages(query) {
+/** 이미지 검색 — 네이버 → 구글 → Bing 순차 (충분하면 이후 스킵) */
+async function searchScoreImages(query, { providers } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
 
@@ -1252,17 +1372,26 @@ async function searchScoreImages(query) {
     }
   };
 
+  // 기본: 네이버→구글→Bing. 호출측에서 일부만 지정 가능
+  const chain = providers || [
+    { name: 'naver', run: searchNaverImages },
+    { name: 'google', run: searchGoogleImages },
+    { name: 'bing', run: searchBingImages },
+  ];
+
   try {
-    const settled = await Promise.allSettled([
-      searchNaverImages(q, controller.signal),
-      searchBingImages(q, controller.signal),
-      searchGoogleImages(q, controller.signal),
-    ]);
-    for (const s of settled) {
-      if (s.status === 'fulfilled') pushAll(s.value);
-      else console.warn('[playlist-score-pdf] search fail:', s.reason?.message);
+    for (const p of chain) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        pushAll(await p.run(q, controller.signal));
+      } catch (e) {
+        console.warn(`[playlist-score-pdf] ${p.name} fail:`, e.message);
+      }
+      // 후보가 충분하면 다음 엔진은 생략 (순차 조기 종료)
+      if (merged.length >= 18) break;
     }
-    if (merged.length < 10) {
+    // 최후 보루 — 앞 엔진이 거의 비었을 때만 DDG
+    if (merged.length < 6) {
       try {
         pushAll(await searchDdgImages(q, controller.signal));
       } catch (e) {
@@ -1270,9 +1399,9 @@ async function searchScoreImages(query) {
       }
     }
     if (merged.length) {
-      const providers = [...new Set(merged.map((m) => m.provider))].join('+');
+      const names = [...new Set(merged.map((m) => m.provider))].join('+');
       console.log(
-        `[playlist-score-pdf] search "${q.slice(0, 40)}" → ${merged.length} · ${providers}`,
+        `[playlist-score-pdf] search "${q.slice(0, 40)}" → ${merged.length} · ${names}`,
       );
     }
     return merged;
