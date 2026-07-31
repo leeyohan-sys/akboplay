@@ -471,6 +471,13 @@ function scoreImageCandidate(img, songTitle, artist = '') {
   ) {
     score -= 80;
   }
+  // PPT/슬라이드·편곡 일부는 한 곡 전체가 아닌 경우가 많음
+  if (/\bPPT\b|피피티|슬라이드|powerpoint/i.test(`${title} ${page}`)) {
+    score -= 70;
+  }
+  if (/상상건반|편곡악보|연주용\s*악보|반주만/i.test(title) && !/단선|멜로디|코드\s*악보|가사\s*악보|전체/i.test(title)) {
+    score -= 35;
+  }
   if (/cdn\.mapianist\.com|mapianist\.com\/sheet/i.test(url + page)) {
     score -= 55;
   }
@@ -484,6 +491,8 @@ function scoreImageCandidate(img, songTitle, artist = '') {
 
   if (/악보|코드악보|가사악보|피아노악보|sheet|chord|단선/.test(title)) score += 45;
   if (/ppt/i.test(title) && /악보/.test(title)) score += 8;
+  // 새찬송가 번호가 제목에 있으면 한 곡 전체 악보 가능성 ↑
+  if (/찬송가\s*\d{2,3}\s*장|새찬송가\s*\d{2,3}/i.test(title)) score += 20;
 
   // 곡명 일치가 핵심
   if (st.length >= 2) {
@@ -750,6 +759,14 @@ function shouldSkipCandidate(c) {
   if (/cdn\.mapianist\.com\/preview/i.test(c.url || '')) return true;
   // 유튜브 썸네일·영상 캡처는 악보 전체가 아님
   if (/ytimg\.com|i\.ytimg\.com|img\.youtube\.com/i.test(c.url || '')) return true;
+  // PPT/슬라이드 악보는 한 장에 곡 일부가 잘리는 경우가 많음
+  if (/\bPPT\b|피피티|슬라이드|powerpoint/i.test(c.title || '')) return true;
+  if (
+    /상상건반/i.test(c.title || '') &&
+    /편곡|PPT|피피티/i.test(c.title || '')
+  ) {
+    return true;
+  }
   if (
     /\b(drum|드럼보|타악보|percussion)\b/i.test(c.title || '') &&
     !/단선|멜로디|코드|가사|피아노/i.test(c.title || '')
@@ -757,6 +774,16 @@ function shouldSkipCandidate(c) {
     return true;
   }
   return false;
+}
+
+/** 잘 알려진 찬송가 번호 힌트 (전체 악보 검색용) */
+function hymnNumberHint(title) {
+  const t = String(title || '');
+  if (/새벽부터\s*우리/.test(t)) return '496';
+  if (/갈길을\s*밝히|갈\s*길을\s*밝히/.test(t)) return '524';
+  if (/구주\s*예수\s*의지/.test(t)) return '542';
+  if (/이\s*몸의\s*소망/.test(t)) return '540';
+  return '';
 }
 
 /** 곡 메타로 악보 이미지 버퍼 확보 */
@@ -767,7 +794,10 @@ async function findScoreImageBuffer(metaOrTitle) {
       : metaOrTitle || {};
   const songTitle = meta.title || '';
   const artist = meta.artist || '';
+  const hymnNo = hymnNumberHint(songTitle);
   const queries = [
+    hymnNo ? `찬송가 ${hymnNo}장 ${songTitle} 악보` : '',
+    hymnNo ? `새찬송가 ${hymnNo}장 ${songTitle}` : '',
     meta.searchQuery,
     songTitle && artist ? `${songTitle} ${artist} 전체 악보` : '',
     songTitle ? `${songTitle} 가사 악보` : '',
@@ -820,6 +850,14 @@ async function findScoreImageBuffer(metaOrTitle) {
       // 가로로 잘린 썸네일/일부 이미지 제외
       if (imgMeta.width / imgMeta.height > 1.45 && c.hit < 60) continue;
       if (imgMeta.height < 480 && c.hit < 70) continue;
+      // 가로형·낮은 이미지는 PPT 일부일 가능성 → 한 곡 전체로 보기 어려움
+      if (
+        imgMeta.width >= imgMeta.height &&
+        imgMeta.height < 900 &&
+        c.hit < 110
+      ) {
+        continue;
+      }
 
       // eslint-disable-next-line no-await-in-loop
       const clarity = await assessImageClarity(buf);
