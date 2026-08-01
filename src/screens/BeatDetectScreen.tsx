@@ -663,18 +663,18 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontSize: 12,
   },
+  // 4열×2행 균등 그리드 (60~130, 8개 프리셋)
   presetRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    width: '100%',
-    maxWidth: 340,
-    justifyContent: 'center',
+    width: 304, // 4×70 + 3×8
+    alignSelf: 'center',
+    justifyContent: 'flex-start',
   },
   presetBtn: {
-    minWidth: 48,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
+    width: 70,
+    paddingVertical: 10,
     borderRadius: 8,
     borderWidth: 1.5,
     borderColor: 'rgba(201, 162, 39, 0.45)',
@@ -690,6 +690,7 @@ const styles = StyleSheet.create({
     ...typography.bodyStrong,
     color: colors.brassBright,
     fontSize: 15,
+    textAlign: 'center',
   },
   presetBtnTextActive: {
     color: colors.cream,
