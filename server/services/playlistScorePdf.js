@@ -1002,6 +1002,8 @@ async function findScoreImageBuffer(metaOrTitle) {
     .replace(/\s+/g, ' ')
     .trim();
   const cores = hangulSearchCores(songTitle);
+  // 네이버/구글에서 잘 되는 붙여쓰기형 (예: 우리는주의움직이는교회 악보)
+  const gluedTitle = hangulTitle.replace(/\s+/g, '');
   const queries = isHymn
     ? [
         hymnNo ? `새찬송가 ${hymnNo}장 ${hangulTitle || songTitle} 악보` : '',
@@ -1016,11 +1018,15 @@ async function findScoreImageBuffer(metaOrTitle) {
         // 곡명만 먼저 — 팀명 때문에 검색이 비는 경우 방지 (예: 우리는 주의 움직이는 교회)
         songTitle ? `${songTitle} 악보` : '',
         hangulTitle ? `${hangulTitle} 악보` : '',
+        // 붙여쓰기형 (스크린샷과 동일 패턴)
+        gluedTitle && gluedTitle.length >= 4 ? `${gluedTitle} 악보` : '',
+        gluedTitle && gluedTitle.length >= 4 ? `${gluedTitle}코드악보` : '',
         hangulTitle ? `${hangulTitle} 코드 악보` : '',
         hangulTitle ? `${hangulTitle} 단선 악보` : '',
         hangulTitle ? `${hangulTitle} 가사 악보` : '',
         hangulTitle ? `${hangulTitle} 피아노 악보` : '',
         ...cores.map((c) => `${c} 악보`),
+        ...cores.map((c) => `${c.replace(/\s+/g, '')} 악보`),
         ...cores.map((c) => `${c} 코드 악보`),
         artist && songTitle ? `${songTitle} ${artist} 악보` : '',
         artist && hangulTitle ? `${hangulTitle} ${artist} 악보` : '',
