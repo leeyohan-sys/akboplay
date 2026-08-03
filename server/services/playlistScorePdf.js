@@ -12,11 +12,11 @@ const MAX_SONGS = 24;
 const SEARCH_TIMEOUT_MS = 20000;
 const FETCH_TIMEOUT_MS = 12000;
 /** 후보 평가·흰 배경 보정 전 긴 변 상한 (PDF 칸 ~850px, 여유 있게) */
-const SCORE_MAX_SIDE = 1600;
+const SCORE_MAX_SIDE = 2200;
 /** 곡당 악보 탐색 상한 — 한 곡이 전체를 붙잡지 않게 */
-const SONG_SEARCH_TIMEOUT_MS = 55000;
+const SONG_SEARCH_TIMEOUT_MS = 70000;
 /** 후보 다운로드·품질검사 최대 개수 (실패 포함 상위 N개 시도) */
-const MAX_CANDIDATES_TO_TRY = 14;
+const MAX_CANDIDATES_TO_TRY = 18;
 /** A4 가로(landscape) ~150dpi — 한 페이지에 좌·우 2곡 */
 const PAGE_W = 1754;
 const PAGE_H = 1240;
@@ -392,6 +392,27 @@ function extractSongMeta(raw) {
   return { title: t, artist, altTitle, searchQuery };
 }
 
+/** 긴 한글 곡명에서 검색용 핵심 구절 뽑기 */
+function hangulSearchCores(title) {
+  const hangul = String(title || '')
+    .replace(/[^가-힣\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!hangul) return [];
+  const cores = new Set([hangul]);
+  const words = hangul.split(/\s+/).filter((w) => w.length >= 2);
+  if (words.length >= 2) {
+    cores.add(words.slice(-2).join(' '));
+    cores.add(words.slice(-3).join(' '));
+  }
+  // 조사 비슷한 짧은 토큰 제거한 압축형
+  const compact = words
+    .filter((w) => !/^(우리는|나는|너의|나의|그|이|저|또|및)$/.test(w))
+    .join(' ');
+  if (compact && compact !== hangul) cores.add(compact);
+  return [...cores].filter((c) => c.replace(/\s/g, '').length >= 4);
+}
+
 function cleanSongTitle(raw) {
   return extractSongMeta(raw).title;
 }
@@ -516,7 +537,9 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
     score -= 35;
   }
   if (/cdn\.mapianist\.com|mapianist\.com\/sheet/i.test(url + page)) {
-    score -= 55;
+    // 미리보기 CDN만 강하게 감점, 제목 매칭된 본문 글은 약하게
+    if (/preview/i.test(url + page)) score -= 55;
+    else score -= 18;
   }
   // 드럼/타악만 보이는 악보 배제 (멜로디 악보 선호)
   if (
@@ -592,6 +615,16 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
       if (ratio >= 0.55) {
         score += latin.length >= 4 ? 8 : 22;
         titleHit = latin.length < 4;
+      }
+      // 긴 곡명: 앞/뒤 핵심 구간만 있어도 인정 (우리는주의움직이는교회)
+      if (!titleHit && hangul.length >= 8) {
+        const head = hangul.slice(0, 6);
+        const mid = hangul.slice(Math.floor(hangul.length / 2) - 3, Math.floor(hangul.length / 2) + 3);
+        const tail = hangul.slice(-6);
+        if (blob.includes(head) || blob.includes(mid) || blob.includes(tail)) {
+          score += 28;
+          titleHit = true;
+        }
       }
     }
     if (!titleHit) score -= 35;
@@ -731,8 +764,8 @@ async function assessImageClarity(buf) {
   const botEdge = edgeAt(mid, h);
   const allEdge = edgeAt(0, h);
 
-  // 하단이 상단보다 훨씬 흐리면(미리보기 블러) 탈락
-  if (topEdge > 8 && botEdge / topEdge < 0.42) {
+  // 하단이 상단보다 훨씬 흐리면(미리보기 블러) 탈락 — 비율을 더 엄격히
+  if (topEdge > 7 && botEdge / topEdge < 0.55) {
     return {
       ok: false,
       reason: 'bottom-blur',
@@ -741,9 +774,20 @@ async function assessImageClarity(buf) {
       botEdge,
     };
   }
+  // 하단 1/3만 따로 봐도 너무 흐리면 탈락
+  const botThird = edgeAt(Math.floor((h * 2) / 3), h);
+  if (topEdge > 8 && botThird / topEdge < 0.48) {
+    return {
+      ok: false,
+      reason: 'bottom-third-blur',
+      score: botThird / topEdge,
+      topEdge,
+      botEdge: botThird,
+    };
+  }
 
   // 전체적으로 너무 흐림
-  if (allEdge < 6.5) {
+  if (allEdge < 7.2) {
     return { ok: false, reason: 'too-blurry', score: allEdge };
   }
 
@@ -957,6 +1001,7 @@ async function findScoreImageBuffer(metaOrTitle) {
     .replace(/[^A-Za-z\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  const cores = hangulSearchCores(songTitle);
   const queries = isHymn
     ? [
         hymnNo ? `새찬송가 ${hymnNo}장 ${hangulTitle || songTitle} 악보` : '',
@@ -968,23 +1013,34 @@ async function findScoreImageBuffer(metaOrTitle) {
         hymnNo ? `찬송가 ${hymnNo}장 가사 악보` : '',
       ].filter(Boolean)
     : [
-        // CCM: 팀명 포함 쿼리를 앞에 두어 동명곡(김연우 등)보다 워십 악보 우선
+        // 곡명만 먼저 — 팀명 때문에 검색이 비는 경우 방지 (예: 우리는 주의 움직이는 교회)
+        songTitle ? `${songTitle} 악보` : '',
+        hangulTitle ? `${hangulTitle} 악보` : '',
+        hangulTitle ? `${hangulTitle} 코드 악보` : '',
+        hangulTitle ? `${hangulTitle} 단선 악보` : '',
+        hangulTitle ? `${hangulTitle} 가사 악보` : '',
+        hangulTitle ? `${hangulTitle} 피아노 악보` : '',
+        ...cores.map((c) => `${c} 악보`),
+        ...cores.map((c) => `${c} 코드 악보`),
         artist && songTitle ? `${songTitle} ${artist} 악보` : '',
         artist && hangulTitle ? `${hangulTitle} ${artist} 악보` : '',
-        songTitle ? `${songTitle} 악보` : '',
         hangulTitle && latinOnly.length >= 3
           ? `${hangulTitle} ${latinOnly} 악보`
           : '',
-        hangulTitle && hangulTitle !== songTitle
-          ? `${hangulTitle} 악보`
-          : '',
         meta.searchQuery,
-        hangulTitle ? `${hangulTitle} 가사 악보` : '',
-        hangulTitle ? `${hangulTitle} 단선 악보` : '',
-        hangulTitle ? `${hangulTitle} 코드 악보` : '',
-        songTitle ? `${songTitle} 코드 악보` : '',
         meta.altTitle ? `${meta.altTitle} 악보` : '',
+        songTitle ? `${songTitle} sheet music` : '',
       ].filter(Boolean);
+
+  // 중복 쿼리 제거 (순서 유지)
+  const uniqQueries = [];
+  const seenQ = new Set();
+  for (const q of queries) {
+    const key = q.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!key || seenQ.has(key)) continue;
+    seenQ.add(key);
+    uniqQueries.push(q);
+  }
 
   const seen = new Set();
   let best = null;
@@ -999,7 +1055,7 @@ async function findScoreImageBuffer(metaOrTitle) {
       .sort((a, b) => b.hit - a.hit);
 
     for (const c of ranked.slice(0, MAX_CANDIDATES_TO_TRY)) {
-      if (c.hit < 22) continue;
+      if (c.hit < 16) continue;
       // 찬송가는 찬송가/새찬송가 표기가 있는 후보만
       if (
         isHymn &&
@@ -1119,7 +1175,7 @@ async function findScoreImageBuffer(metaOrTitle) {
     { name: 'bing', run: searchBingImages },
   ];
 
-  outer: for (const q of queries) {
+  outer: for (const q of uniqQueries) {
     for (const p of providerChain) {
       // eslint-disable-next-line no-await-in-loop
       const found = await searchScoreImages(q, { providers: [p] });
@@ -1137,6 +1193,86 @@ async function findScoreImageBuffer(metaOrTitle) {
     }
     // 이미 쓸 만한 후보가 있으면 추가 쿼리 생략
     if (best && best.fitness >= (isHymn ? 130 : 110)) break;
+  }
+
+  // 1차 실패 시: 문턱을 낮춰 한 번 더 (긴 CCM 곡명·블로그 악보 대응)
+  if (!best && !isHymn && uniqQueries.length) {
+    console.log(
+      `[playlist-score-pdf] relaxed retry · "${(songTitle || '').slice(0, 40)}"`,
+    );
+    const softEvaluate = async (list) => {
+      const ranked = list
+        .map((c) => ({
+          ...c,
+          hit: scoreImageCandidate(c, songTitle, artist, { isHymn, hymnNo }),
+        }))
+        .sort((a, b) => b.hit - a.hit);
+      for (const c of ranked.slice(0, MAX_CANDIDATES_TO_TRY)) {
+        if (c.hit < 12) continue;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          let buf = await fetchBuffer(c.url, c.source || undefined);
+          // eslint-disable-next-line no-await-in-loop
+          buf = await normalizeScoreBuffer(buf);
+          const sharp = require('sharp');
+          // eslint-disable-next-line no-await-in-loop
+          const imgMeta = await sharp(buf).metadata();
+          if (!imgMeta.width || !imgMeta.height) continue;
+          if (imgMeta.height < 280) continue;
+          // eslint-disable-next-line no-await-in-loop
+          const clarity = await assessImageClarity(buf);
+          if (!clarity.ok) continue;
+          if ((clarity.staffish || 0) < 1 && c.hit < 40) continue;
+          const paper = Number(clarity.paper) || 0;
+          if (paper < 160) continue;
+          const area = imgMeta.width * imgMeta.height;
+          const fitness =
+            c.hit +
+            Math.min(30, Math.floor(area / 50000)) +
+            Math.min(20, (clarity.staffish || 0) * 2) +
+            (paper >= 210 ? 12 : 0);
+          if (!best || fitness > best.fitness) {
+            best = {
+              buffer: buf,
+              meta: {
+                title: c.title,
+                url: c.url,
+                source: c.source,
+                hit: c.hit,
+                fitness,
+                clarity: clarity.reason,
+                paper,
+                provider: c.provider,
+                relaxed: true,
+              },
+              scoreFound: true,
+              fitness,
+            };
+          }
+          if (fitness >= 90) return true;
+        } catch {
+          /* skip */
+        }
+      }
+      return Boolean(best);
+    };
+
+    for (const q of uniqQueries.slice(0, 8)) {
+      // eslint-disable-next-line no-await-in-loop
+      const found = await searchScoreImages(q, {
+        providers: [{ name: 'naver', run: searchNaverImages }],
+      });
+      const batch = [];
+      for (const c of found) {
+        if (!c.url || seen.has(c.url)) continue;
+        if (shouldSkipCandidate(c, { isHymn, hymnNo })) continue;
+        seen.add(c.url);
+        batch.push(c);
+      }
+      if (!batch.length) continue;
+      // eslint-disable-next-line no-await-in-loop
+      if (await softEvaluate(batch)) break;
+    }
   }
 
   if (best) {
@@ -1415,20 +1551,85 @@ async function searchScoreImages(query, { providers } = {}) {
 /** 악보를 못 찾았을 때 플레이스홀더 카드 */
 async function renderPlaceholderCard(song, slotW, slotH) {
   const sharp = require('sharp');
-  const title = escapeXml(song.title || '제목 없음');
-  const sub = escapeXml(song.channel || song.videoTitle || '');
-  const svg = wrapSvg(
-    slotW,
-    slotH,
-    `
+  const title = String(song.title || '제목 없음').slice(0, 40);
+  const sub = String(song.channel || song.videoTitle || '').slice(0, 48);
+  const msg = '악보 이미지를 찾지 못했습니다';
+
+  // SVG 텍스트는 Linux에서 한글 폰트가 없으면 깨지므로 sharp text+fontfile 우선
+  const layers = [
+    {
+      input: Buffer.from(
+        `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${slotW}" height="${slotH}">
   <rect width="100%" height="100%" fill="#ffffff"/>
   <rect x="16" y="16" width="${slotW - 32}" height="${slotH - 32}" fill="none" stroke="#CCCCCC" stroke-width="2"/>
-  <text x="${slotW / 2}" y="${slotH * 0.42}" text-anchor="middle" font-size="56" fill="#999999">𝄞</text>
-  <text x="${slotW / 2}" y="${slotH * 0.55}" text-anchor="middle" font-size="28" font-weight="700" fill="#333333">${title}</text>
-  <text x="${slotW / 2}" y="${slotH * 0.62}" text-anchor="middle" font-size="16" fill="#777777">${sub}</text>
-  <text x="${slotW / 2}" y="${slotH * 0.74}" text-anchor="middle" font-size="15" fill="#999999">악보 이미지를 찾지 못했습니다</text>`,
-  );
-  return sharp(Buffer.from(svg)).png().toBuffer();
+</svg>`,
+      ),
+      top: 0,
+      left: 0,
+    },
+  ];
+
+  const tryText = async (text, dpi, topY) => {
+    try {
+      const opts = {
+        text,
+        font: 'sans',
+        dpi,
+        rgba: true,
+        align: 'center',
+        width: Math.max(80, slotW - 64),
+      };
+      if (fs.existsSync(FONT_BOLD)) opts.fontfile = FONT_BOLD;
+      else if (fs.existsSync(FONT_REG)) opts.fontfile = FONT_REG;
+      const buf = await sharp({
+        text: opts,
+      })
+        .png()
+        .toBuffer();
+      const meta = await sharp(buf).metadata();
+      const left = Math.max(0, Math.floor((slotW - (meta.width || 0)) / 2));
+      layers.push({ input: buf, top: topY, left });
+      return true;
+    } catch (e) {
+      console.warn(
+        '[playlist-score-pdf] placeholder text fail:',
+        String(e.message || e).slice(0, 80),
+      );
+      return false;
+    }
+  };
+
+  await tryText(title, 180, Math.floor(slotH * 0.4));
+  if (sub) await tryText(sub, 120, Math.floor(slotH * 0.52));
+  await tryText(msg, 130, Math.floor(slotH * 0.66));
+
+  // 폰트 렌더 실패 시 ASCII 안내라도 표시
+  if (layers.length === 1) {
+    const svg = wrapSvg(
+      slotW,
+      slotH,
+      `
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <rect x="16" y="16" width="${slotW - 32}" height="${slotH - 32}" fill="none" stroke="#CCCCCC" stroke-width="2"/>
+  <text x="${slotW / 2}" y="${slotH * 0.45}" text-anchor="middle" font-size="22" fill="#333333">${escapeXml(title)}</text>
+  <text x="${slotW / 2}" y="${slotH * 0.55}" text-anchor="middle" font-size="14" fill="#777777">${escapeXml(sub)}</text>
+  <text x="${slotW / 2}" y="${slotH * 0.68}" text-anchor="middle" font-size="14" fill="#999999">Score image not found</text>`,
+    );
+    return sharp(Buffer.from(svg)).png().toBuffer();
+  }
+
+  return sharp({
+    create: {
+      width: slotW,
+      height: slotH,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  })
+    .composite(layers)
+    .png()
+    .toBuffer();
 }
 
 /**
@@ -1442,13 +1643,15 @@ async function buildSongSlot(song, slotW, slotH) {
   if (!img) {
     img = await renderPlaceholderCard(song, slotW, slotH);
   } else {
-    // 여백 조금 두고 칸에 맞춤 (가로·세로 모두 맞춤, 잘림 최소)
+    // 칸을 최대한 채우도록 맞춤 — 너무 작은 원본은 확대해서 가독성 확보
     img = await sharp(img)
-      .resize(slotW - 8, slotH - 8, {
+      .resize(slotW - 12, slotH - 12, {
         fit: 'inside',
+        withoutEnlargement: false,
         background: '#ffffff',
       })
       .flatten({ background: '#ffffff' })
+      .sharpen({ sigma: 0.6 })
       .png()
       .toBuffer();
   }
@@ -1481,7 +1684,7 @@ async function buildSongSlot(song, slotW, slotH) {
       { input: img, top, left },
       { input: Buffer.from(badgeSvg), top: 6, left: 6 },
     ])
-    .jpeg({ quality: 93 })
+    .jpeg({ quality: 95, mozjpeg: true })
     .toBuffer();
 }
 
