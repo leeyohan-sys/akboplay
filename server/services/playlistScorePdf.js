@@ -14,7 +14,7 @@ const FETCH_TIMEOUT_MS = 12000;
 /** 후보 평가·흰 배경 보정 전 긴 변 상한 (PDF 칸 ~850px, 여유 있게) */
 const SCORE_MAX_SIDE = 2200;
 /** 곡당 악보 탐색 상한 — 한 곡이 전체를 붙잡지 않게 */
-const SONG_SEARCH_TIMEOUT_MS = 70000;
+const SONG_SEARCH_TIMEOUT_MS = 90000;
 /** 후보 다운로드·품질검사 최대 개수 (실패 포함 상위 N개 시도) */
 const MAX_CANDIDATES_TO_TRY = 18;
 /** A4 가로(landscape) ~150dpi — 한 페이지에 좌·우 2곡 */
@@ -714,6 +714,22 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
       !/단선|멜로디|코드\s*악보|가사/i.test(`${title} ${page}`)) {
     score -= 12;
   }
+  // 곡명(+악보)과 거의 같은 제목이면 가산 — 블로그 원본 악보 우선
+  const titleCompact = hangul || st;
+  const candCompact = String(title || '')
+    .replace(/[^가-힣]/g, '')
+    .toLowerCase();
+  if (
+    titleCompact.length >= 8 &&
+    candCompact.includes(titleCompact) &&
+    /악보/.test(title)
+  ) {
+    score += 35;
+  }
+  // F/G/A 키 여러 장 올려둔 찬양 블로그형
+  if (/[A-G]b?\s*코드|[DEFGA]\s*키|F\s*\/\s*G\s*\/\s*A/i.test(title)) {
+    score += 14;
+  }
   // 흰 배경·인쇄용 표현 가산 / 어두운·빈티지 감점
   if (/흰\s*배경|화이트|인쇄용|고화질|clean|white\s*bg/i.test(`${title} ${page}`)) {
     score += 12;
@@ -764,13 +780,33 @@ async function trySalvageBottomBlur(buf) {
   }
 }
 
+/** 약간 흐린 블로그 악보 — 샤픈 후 재검사 */
+async function trySalvageTooBlurry(buf, { minAllEdge = 5.0 } = {}) {
+  const sharp = require('sharp');
+  try {
+    const sharpened = await sharp(buf)
+      .sharpen({ sigma: 1.1, m1: 1.2, m2: 0.7 })
+      .png()
+      .toBuffer();
+    const clarity = await assessImageClarity(sharpened, { minAllEdge });
+    if (clarity.ok) return { buffer: sharpened, clarity };
+    // 샤픈 실패여도 제목 매칭이 강한 후보용 소프트 통과
+    const soft = await assessImageClarity(buf, { minAllEdge });
+    if (soft.ok) return { buffer: buf, clarity: { ...soft, reason: 'soft-edge' } };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 다운로드한 악보 이미지가 실제로 읽히는지 검사
  * - 하단만 흐린 미리보기
  * - PREVIEW 워터마크(어두운 대각선 밴드)
  * - 전체적으로 너무 흐린 이미지
  */
-async function assessImageClarity(buf) {
+async function assessImageClarity(buf, opts = {}) {
+  const minAllEdge = Number(opts.minAllEdge) > 0 ? Number(opts.minAllEdge) : 7.2;
   const sharp = require('sharp');
   const meta = await sharp(buf).metadata();
   const w0 = meta.width || 0;
@@ -780,6 +816,7 @@ async function assessImageClarity(buf) {
   }
 
   const { data, info } = await sharp(buf)
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
     .greyscale()
     .resize(360, 480, { fit: 'inside' })
     .raw()
@@ -832,9 +869,9 @@ async function assessImageClarity(buf) {
     };
   }
 
-  // 전체적으로 너무 흐림
-  if (allEdge < 7.2) {
-    return { ok: false, reason: 'too-blurry', score: allEdge };
+  // 전체적으로 너무 흐림 (호출측에서 강한 제목매칭이면 minAllEdge를 낮춤)
+  if (allEdge < minAllEdge) {
+    return { ok: false, reason: 'too-blurry', score: allEdge, allEdge };
   }
 
   // 어두운 픽셀 비율 — PREVIEW 워터마크는 검정 글자가 많음
@@ -904,8 +941,10 @@ async function assessImageClarity(buf) {
  */
 async function normalizeScoreBuffer(buf) {
   const sharp = require('sharp');
+  // 투명 PNG(블로그 악보)는 알파만 있는 경우가 많아 흰 합성 후 처리
   return sharp(buf)
     .rotate()
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
     .resize(SCORE_MAX_SIDE, SCORE_MAX_SIDE, {
       fit: 'inside',
       withoutEnlargement: true,
@@ -923,6 +962,7 @@ async function whitenScoreBackground(buf) {
   const sharp = require('sharp');
   const base = sharp(buf)
     .rotate()
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
     .resize(SCORE_MAX_SIDE, SCORE_MAX_SIDE, {
       fit: 'inside',
       withoutEnlargement: true,
@@ -1175,6 +1215,21 @@ async function findScoreImageBuffer(metaOrTitle) {
             );
           }
         }
+        // 네이버 블로그 악보가 리사이즈 검사에서만 흐리게 나오는 경우 살리기
+        if (!clarity.ok && clarity.reason === 'too-blurry' && c.hit >= 130) {
+          // eslint-disable-next-line no-await-in-loop
+          const salvaged = await trySalvageTooBlurry(buf, { minAllEdge: 4.6 });
+          if (salvaged) {
+            buf = salvaged.buffer;
+            clarity = {
+              ...salvaged.clarity,
+              reason: `salvaged-too-blurry`,
+            };
+            console.log(
+              `[playlist-score-pdf] salvage too-blurry · ${(c.title || '').slice(0, 40)}`,
+            );
+          }
+        }
         if (!clarity.ok) {
           console.log(
             `[playlist-score-pdf] skip low-quality (${clarity.reason}) · ${(c.title || '').slice(0, 40)}`,
@@ -1218,7 +1273,12 @@ async function findScoreImageBuffer(metaOrTitle) {
         const candComplete =
           /단선|멜로디|코드\s*악보|가사\s*악보|lead\s*sheet|전체\s*악보/i.test(
             candTitle,
-          );
+          ) ||
+          // "우리는 주의 움직이는 교회 악보"처럼 곡명+악보 단문이어도 완성본으로 봄
+          (hangulTitle.replace(/\s+/g, '').length >= 8 &&
+            candTitle.replace(/\s+/g, '').includes(hangulTitle.replace(/\s+/g, '')) &&
+            /악보/.test(candTitle) &&
+            !/<Intro>|인트로만|피아노\s*악보/i.test(candTitle));
         const bestPartial =
           best &&
           (/<Intro>|\[Intro\]|인트로만/i.test(best.meta?.title || '') ||
@@ -1352,6 +1412,14 @@ async function findScoreImageBuffer(metaOrTitle) {
           if (!clarity.ok && /bottom-blur|bottom-third-blur/i.test(clarity.reason || '')) {
             // eslint-disable-next-line no-await-in-loop
             const salvaged = await trySalvageBottomBlur(buf);
+            if (salvaged) {
+              buf = salvaged.buffer;
+              clarity = salvaged.clarity;
+            }
+          }
+          if (!clarity.ok && clarity.reason === 'too-blurry' && c.hit >= 120) {
+            // eslint-disable-next-line no-await-in-loop
+            const salvaged = await trySalvageTooBlurry(buf, { minAllEdge: 4.4 });
             if (salvaged) {
               buf = salvaged.buffer;
               clarity = salvaged.clarity;
