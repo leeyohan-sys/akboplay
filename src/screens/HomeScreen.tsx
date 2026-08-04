@@ -23,6 +23,11 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 export function HomeScreen({ navigation }: Props) {
   const { width, height } = useWindowDimensions();
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{
+    message: string;
+    current: number;
+    total: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const pulse = React.useRef(new Animated.Value(0)).current;
@@ -72,8 +77,20 @@ export function HomeScreen({ navigation }: Props) {
 
   const pickPdf = async () => {
     setError(null);
+    setProgress(null);
     try {
       setLoading(true);
+      const onProgress = (job: {
+        message?: string;
+        current?: number;
+        total?: number;
+      }) => {
+        setProgress({
+          message: job.message || '처리 중…',
+          current: job.current ?? 0,
+          total: job.total ?? 0,
+        });
+      };
 
       let analyzed;
       if (Platform.OS === 'web') {
@@ -83,7 +100,7 @@ export function HomeScreen({ navigation }: Props) {
           setLoading(false);
           return;
         }
-        analyzed = await api.analyzePdfFile(file);
+        analyzed = await api.analyzePdfFile(file, onProgress);
       } else {
         const result = await DocumentPicker.getDocumentAsync({
           type: 'application/pdf',
@@ -99,6 +116,7 @@ export function HomeScreen({ navigation }: Props) {
           asset.uri,
           asset.name || 'score.pdf',
           (asset as { file?: File }).file ?? null,
+          onProgress,
         );
       }
 
@@ -133,6 +151,7 @@ export function HomeScreen({ navigation }: Props) {
       );
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -189,7 +208,7 @@ export function HomeScreen({ navigation }: Props) {
       footer={
         <View style={styles.actions}>
           <PrimaryButton
-            label="PDF 악보 첨부"
+            label={loading ? 'PDF 분석 중…' : 'PDF 악보 첨부'}
             onPress={pickPdf}
             loading={loading}
           />
@@ -262,6 +281,34 @@ export function HomeScreen({ navigation }: Props) {
             <Text style={[styles.clef, { fontSize: heroSize * 0.42 }]}>𝄞</Text>
           </View>
 
+          {progress ? (
+            <View style={styles.progressBox}>
+              <Text style={styles.progressMessage}>{progress.message}</Text>
+              <View style={styles.progressTrack}>
+                <View
+                  style={[
+                    styles.progressFill,
+                    {
+                      width: `${Math.round(
+                        Math.min(
+                          1,
+                          progress.total > 0
+                            ? progress.current / progress.total
+                            : 0.15,
+                        ) * 100,
+                      )}%`,
+                    },
+                  ]}
+                />
+              </View>
+              {progress.total > 0 ? (
+                <Text style={styles.progressMeta}>
+                  {progress.current}/{progress.total}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <Text style={styles.serverHint}>
@@ -332,6 +379,40 @@ const styles = StyleSheet.create({
     color: '#F0B0A4',
     marginTop: 8,
     lineHeight: 18,
+  },
+  progressBox: {
+    marginTop: 8,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(30, 44, 68, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(201, 162, 39, 0.35)',
+  },
+  progressMessage: {
+    ...typography.caption,
+    color: colors.brassBright,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(232, 223, 200, 0.12)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+    backgroundColor: colors.brassBright,
+  },
+  progressMeta: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.mist,
+    marginTop: 6,
+    alignSelf: 'flex-end',
   },
   serverHint: {
     ...typography.caption,

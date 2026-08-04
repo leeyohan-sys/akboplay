@@ -31,6 +31,17 @@ export type AnalyzeResult = {
   note?: string;
 };
 
+export type AnalyzeJob = {
+  jobId: string;
+  status: 'queued' | 'running' | 'done' | 'error';
+  message?: string;
+  stage?: string;
+  current?: number;
+  total?: number;
+  error?: string | null;
+  result?: AnalyzeResult | null;
+};
+
 export type PlaylistResult = {
   playlistId: string;
   playlistUrl: string;

@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import type {
+  AnalyzeJob,
   AnalyzeResult,
   MatchedSong,
   PlaylistResult,
@@ -149,6 +150,30 @@ async function buildPdfFormData(
   return form;
 }
 
+async function pollAnalyzeJob(
+  jobId: string,
+  onProgress?: (job: AnalyzeJob) => void,
+): Promise<AnalyzeJob> {
+  const startedAt = Date.now();
+  let lastKey = '';
+  for (;;) {
+    const job = await request<AnalyzeJob>(
+      `/api/analyze/jobs/${encodeURIComponent(jobId)}`,
+      { timeoutMs: 30000 },
+    );
+    const key = `${job.status}|${job.stage}|${job.message}|${job.current}|${job.total}`;
+    if (key !== lastKey) {
+      lastKey = key;
+      onProgress?.(job);
+    }
+    if (job.status === 'done' || job.status === 'error') return job;
+    if (Date.now() - startedAt > 130000) {
+      throw new Error('분석 작업이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.');
+    }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
 /** 웹 전용: 안정적인 네이티브 파일 선택기 */
 export function pickPdfFileWeb(): Promise<File | null> {
   return new Promise((resolve) => {
@@ -256,28 +281,65 @@ export const api = {
     uri: string,
     fileName: string,
     file?: File | Blob | null,
+    onProgress?: (job: AnalyzeJob) => void,
   ): Promise<AnalyzeResult> => {
     const form = await buildPdfFormData(uri, fileName, file);
-
-    return request<AnalyzeResult>('/api/analyze', {
+    onProgress?.({
+      jobId: '',
+      status: 'running',
+      stage: 'upload',
+      message: 'PDF 업로드 중…',
+      current: 0,
+      total: 5,
+    });
+    const started = await request<AnalyzeJob>('/api/analyze/jobs', {
       method: 'POST',
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 60000,
     });
+    onProgress?.(started);
+    const final = await pollAnalyzeJob(started.jobId, onProgress);
+    if (final.status === 'error') {
+      throw new Error(final.error || final.message || 'PDF 분석에 실패했습니다.');
+    }
+    if (!final.result) {
+      throw new Error('분석 결과를 받지 못했습니다.');
+    }
+    return final.result;
   },
 
   /** 웹에서 File 객체를 바로 업로드 */
-  analyzePdfFile: async (file: File): Promise<AnalyzeResult> => {
+  analyzePdfFile: async (
+    file: File,
+    onProgress?: (job: AnalyzeJob) => void,
+  ): Promise<AnalyzeResult> => {
     const form = new FormData();
     const name = file.name || 'score.pdf';
     // UTF-8 텍스트 필드로 파일명 별도 전달 (multipart filename 깨짐 방지)
     form.append('fileName', name);
     form.append('pdf', file, name);
-    return request<AnalyzeResult>('/api/analyze', {
+    onProgress?.({
+      jobId: '',
+      status: 'running',
+      stage: 'upload',
+      message: 'PDF 업로드 중…',
+      current: 0,
+      total: 5,
+    });
+    const started = await request<AnalyzeJob>('/api/analyze/jobs', {
       method: 'POST',
       body: form,
-      timeoutMs: 120000,
+      timeoutMs: 60000,
     });
+    onProgress?.(started);
+    const final = await pollAnalyzeJob(started.jobId, onProgress);
+    if (final.status === 'error') {
+      throw new Error(final.error || final.message || 'PDF 분석에 실패했습니다.');
+    }
+    if (!final.result) {
+      throw new Error('분석 결과를 받지 못했습니다.');
+    }
+    return final.result;
   },
 
   matchYoutube: (songs: { id: string; title: string; composer?: string }[]) =>

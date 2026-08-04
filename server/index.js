@@ -22,6 +22,9 @@ const { isConfigured: isGeminiConfigured } = require('./services/geminiClient');
 /** 재생목록 PDF 비동기 작업 (모바일 장시간 요청 타임아웃 방지) */
 const pdfJobs = new Map();
 const PDF_JOB_TTL_MS = 30 * 60 * 1000;
+/** PDF 분석 비동기 작업 (진행률 폴링) */
+const analyzeJobs = new Map();
+const ANALYZE_JOB_TTL_MS = 30 * 60 * 1000;
 
 function cleanupPdfJobs() {
   const now = Date.now();
@@ -30,6 +33,28 @@ function cleanupPdfJobs() {
       pdfJobs.delete(id);
     }
   }
+}
+
+function cleanupAnalyzeJobs() {
+  const now = Date.now();
+  for (const [id, job] of analyzeJobs.entries()) {
+    if (now - (job.updatedAt || job.createdAt || 0) > ANALYZE_JOB_TTL_MS) {
+      analyzeJobs.delete(id);
+    }
+  }
+}
+
+function publicAnalyzeJob(job) {
+  return {
+    jobId: job.id,
+    status: job.status,
+    message: job.message || '',
+    stage: job.stage || '',
+    current: job.current || 0,
+    total: job.total || 0,
+    error: job.error || null,
+    result: job.result || null,
+  };
 }
 
 function publicJob(job) {
@@ -91,7 +116,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'playlist-pdf-flatten-alpha-20260804',
+    version: 'analyze-progress-jobs-20260804',
   });
 });
 
@@ -150,6 +175,114 @@ app.post('/api/analyze', upload.single('pdf'), async (req, res) => {
       error: err.message || 'PDF 분석에 실패했습니다.',
     });
   }
+});
+
+/** PDF 분석 작업 시작 → 즉시 jobId 반환 */
+app.post('/api/analyze/jobs', upload.single('pdf'), async (req, res) => {
+  cleanupAnalyzeJobs();
+  try {
+    const fileName = decodeUploadFileName(
+      req.body?.fileName || req.file?.originalname || 'score.pdf',
+    );
+    if (!req.file) {
+      return res.status(400).json({
+        error:
+          'PDF 파일이 전달되지 않았습니다. 웹에서는 파일을 다시 첨부해 주세요.',
+      });
+    }
+
+    const id = randomUUID();
+    const job = {
+      id,
+      status: 'queued',
+      stage: 'queued',
+      message: '대기 중…',
+      current: 0,
+      total: 5,
+      error: null,
+      result: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    analyzeJobs.set(id, job);
+
+    const buffer = req.file.buffer;
+    console.log(`[analyze/jobs] ${id} 시작 · ${fileName}`);
+
+    setImmediate(() => {
+      job.status = 'running';
+      job.message = '분석 시작…';
+      job.updatedAt = Date.now();
+
+      Promise.race([
+        analyzePdfBuffer(buffer, fileName, {
+          onProgress: (p) => {
+            job.stage = p.stage || job.stage;
+            job.message = p.message || job.message;
+            if (typeof p.current === 'number') job.current = p.current;
+            if (typeof p.total === 'number') job.total = p.total;
+            job.updatedAt = Date.now();
+          },
+        }),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('분석 시간이 초과되었습니다.')),
+            100000,
+          ),
+        ),
+      ])
+        .then((result) => {
+          job.status = 'done';
+          job.stage = 'done';
+          job.current = job.total || 5;
+          job.message =
+            result.songs?.length > 0
+              ? `${result.songs.length}곡 인식 완료`
+              : result.note || '완료';
+          job.result = result;
+          job.updatedAt = Date.now();
+          console.log(`[analyze/jobs] ${id} 완료 · ${result.songs?.length || 0}곡`);
+        })
+        .catch((err) => {
+          console.error(`[analyze/jobs] ${id}`, err);
+          if (/초과|timeout|aborted/i.test(String(err.message || ''))) {
+            job.status = 'done';
+            job.stage = 'done';
+            job.result = {
+              fileName,
+              method: 'heuristic',
+              note: '서버에서 문서 인식이 오래 걸려 중단되었습니다. 곡을 직접 추가해 주세요.',
+              songs: [],
+            };
+            job.message = job.result.note;
+            job.error = null;
+          } else {
+            job.status = 'error';
+            job.stage = 'error';
+            job.error = err.message || 'PDF 분석 실패';
+            job.message = job.error;
+          }
+          job.updatedAt = Date.now();
+        });
+    });
+
+    return res.status(202).json(publicAnalyzeJob(job));
+  } catch (err) {
+    console.error('[analyze/jobs]', err);
+    return res.status(500).json({
+      error: err.message || '분석 작업 시작에 실패했습니다.',
+    });
+  }
+});
+
+/** PDF 분석 작업 상태 폴링 */
+app.get('/api/analyze/jobs/:id', (req, res) => {
+  cleanupAnalyzeJobs();
+  const job = analyzeJobs.get(String(req.params.id || ''));
+  if (!job) {
+    return res.status(404).json({ error: '작업을 찾을 수 없습니다.' });
+  }
+  return res.json(publicAnalyzeJob(job));
 });
 
 /** 곡 목록 → YouTube 매칭 */

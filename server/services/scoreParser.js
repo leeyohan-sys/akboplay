@@ -237,8 +237,17 @@ async function ocrPdfPages(buffer, options = {}) {
   }
 }
 
-async function analyzePdfBuffer(buffer, fileName) {
+async function analyzePdfBuffer(buffer, fileName, opts = {}) {
+  const report = (stage, message, current = 0, total = 0) => {
+    try {
+      opts.onProgress?.({ stage, message, current, total });
+    } catch {
+      // 진행 콜백 오류는 분석 흐름에 영향 주지 않음
+    }
+  };
+
   if (!buffer || buffer.length < 20) {
+    report('done', '데모 결과 준비 완료', 1, 1);
     return {
       fileName,
       method: 'demo',
@@ -251,6 +260,7 @@ async function analyzePdfBuffer(buffer, fileName) {
     };
   }
 
+  report('parse', 'PDF 텍스트 추출 중…', 1, 5);
   const parser = new PDFParse({ data: buffer });
   let text = '';
   try {
@@ -266,6 +276,7 @@ async function analyzePdfBuffer(buffer, fileName) {
   // 1) 모든 PDF에 Gemini 우선 (키 설정 시)
   if (isGeminiConfigured()) {
     try {
+      report('gemini', 'AI 악보 인식 중…', 2, 5);
       console.log('[analyze] Gemini 인식 시작…');
       const gemini = await extractSongsWithGemini(buffer, fileName);
       if (gemini?.songs?.length) {
@@ -274,14 +285,17 @@ async function analyzePdfBuffer(buffer, fileName) {
         text = `${text}\n${gemini.rawText || ''}`;
         method = 'gemini';
         console.log(`[analyze] Gemini 완료 · 후보 ${songs.length}곡`);
+        report('gemini', `AI 인식 완료 · ${songs.length}곡`, 3, 5);
       }
     } catch (err) {
       console.warn('[analyze] Gemini 실패:', err.message);
+      report('gemini', 'AI 인식 실패 · 다른 방식으로 계속 진행', 2, 5);
     }
   }
 
   // 2) Gemini 실패/미설정 시 텍스트·OCR 폴백
   if (songs.length === 0) {
+    report('text', '텍스트에서 곡 제목 분석 중…', 3, 5);
     songs =
       text.length >= 10 && !isThinPdfText(text)
         ? extractSongsFromText(text)
@@ -294,6 +308,7 @@ async function analyzePdfBuffer(buffer, fileName) {
       isThinPdfText(text)
     ) {
       try {
+        report('ocr', 'OCR 스캔 중… (최대 약 35초)', 4, 5);
         console.log('[analyze] OCR 폴백 시작…');
         const ocrText = await ocrPdfPages(buffer, { maxMs: 35000 });
         if (ocrText && ocrText.trim().length > 20) {
@@ -303,15 +318,18 @@ async function analyzePdfBuffer(buffer, fileName) {
           );
           method = 'ocr';
           console.log(`[analyze] OCR 완료 · 후보 ${songs.length}곡`);
+          report('ocr', `OCR 완료 · ${songs.length}곡`, 4, 5);
         }
       } catch (err) {
         console.warn('[analyze] OCR 실패:', err.message);
+        report('ocr', 'OCR 실패 · 결과 정리로 넘어감', 4, 5);
       }
     } else if (method !== 'gemini') {
       method = 'text';
     }
   }
 
+  report('finalize', '인식 결과 정리 중…', 5, 5);
   // 파일명을 곡으로 쓰지 않음 (Adobe Scan 2026. 7. 17. 등)
   songs = songs.filter(
     (s) => !isJunkFileName(s.title) && !isPageMarker(s.title),
@@ -362,6 +380,7 @@ async function analyzePdfBuffer(buffer, fileName) {
   });
 
   if (songs.length === 0) {
+    report('done', '곡을 찾지 못함 · 직접 추가 가능', 5, 5);
     return {
       fileName,
       method: method === 'ocr' || method === 'gemini' ? method : 'heuristic',
@@ -371,6 +390,7 @@ async function analyzePdfBuffer(buffer, fileName) {
     };
   }
 
+  report('done', `${songs.length}곡 인식 완료`, 5, 5);
   return {
     fileName,
     method,

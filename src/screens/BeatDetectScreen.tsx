@@ -24,8 +24,9 @@ import { TAP_BPM_PRESETS, clampBpm } from '../utils/tapBpmPresets';
 type Props = NativeStackScreenProps<RootStackParamList, 'BeatDetect'>;
 type Mode = 'auto' | 'tap';
 
-function formatBpm(bpm: number): string {
+function formatBpm(bpm: number, precise = false): string {
   if (bpm <= 0) return '—';
+  if (precise) return bpm.toFixed(1);
   return Number.isInteger(bpm) ? String(bpm) : bpm.toFixed(1);
 }
 
@@ -37,6 +38,7 @@ export function BeatDetectScreen({}: Props) {
   const [guideBpm, setGuideBpm] = useState(0);
   const [beat, setBeat] = useState(0);
   const [level, setLevel] = useState(0);
+  const [confidence, setConfidence] = useState(0);
   const [tapCount, setTapCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<number | null>(null);
@@ -86,17 +88,31 @@ export function BeatDetectScreen({}: Props) {
     setTapCount(0);
   }, []);
 
-  /** 원 옆 −/+ 로 BPM 1씩 조절 (정수만) */
-  const nudgeBpm = useCallback((delta: number) => {
-    setBpm((prev) => {
-      const base = prev > 0 ? Math.round(prev) : 90;
-      return clampBpm(base + delta);
-    });
-    setActivePreset(null);
-    setError(null);
-    tapTimesRef.current = [];
-    setTapCount(0);
-  }, []);
+  /**
+   * 탭: BPM 1씩 조절 / 자동: 가이드(목표) 템포 조절 (liveBPM Guided)
+   */
+  const nudgeBpm = useCallback(
+    (delta: number) => {
+      setError(null);
+      if (mode === 'auto') {
+        setGuideBpm((prev) => {
+          const base = prev > 0 ? prev : bpm > 0 ? Math.round(bpm) : 100;
+          const next = clampBpm(base + delta);
+          handleRef.current?.setGuideBpm(next);
+          return next;
+        });
+        return;
+      }
+      setBpm((prev) => {
+        const base = prev > 0 ? Math.round(prev) : 90;
+        return clampBpm(base + delta);
+      });
+      setActivePreset(null);
+      tapTimesRef.current = [];
+      setTapCount(0);
+    },
+    [mode, bpm],
+  );
 
   // 탭 템포: BPM만 있으면 점멸 / 자동감지: 듣는 중에만 점멸
   useEffect(() => {
@@ -144,6 +160,7 @@ export function BeatDetectScreen({}: Props) {
     handleRef.current = null;
     setListening(false);
     setLevel(0);
+    setConfidence(0);
     setBeat(0);
     flash.setValue(0);
   }, [flash]);
@@ -162,7 +179,7 @@ export function BeatDetectScreen({}: Props) {
 
   useEffect(() => () => stopAuto(), [stopAuto]);
 
-  const startAuto = async () => {
+  const startAuto = async (opts?: { guide?: number }) => {
     setError(null);
     if (!isBeatDetectorSupported()) {
       setError(
@@ -174,10 +191,11 @@ export function BeatDetectScreen({}: Props) {
       stopAuto();
       setBpm(0);
       setBeat(0);
+      setConfidence(0);
       const handle = await startBeatDetector({
+        // liveBPM처럼 0.1 BPM 정밀도 유지
         onBpm: (next) => {
-          const rounded = Math.round(next);
-          setBpm((prev) => (prev === rounded ? prev : rounded));
+          setBpm((prev) => (Math.abs(prev - next) < 0.05 ? prev : next));
         },
         onOnset: (timeMs) => {
           const p = periodRef.current;
@@ -191,9 +209,17 @@ export function BeatDetectScreen({}: Props) {
           }
         },
         onLevel: (lv) => setLevel(lv),
+        onConfidence: (c) => setConfidence(c),
         onError: (msg) => setError(msg),
       });
-      if (guideBpm > 0) handle.setGuideBpm(guideBpm);
+      // 모드 전환 시 stale state 방지: opts.guide 우선
+      const g = opts?.guide !== undefined ? opts.guide : guideBpm;
+      if (g > 0) {
+        handle.setGuideBpm(g);
+        setGuideBpm(g);
+      } else {
+        handle.setGuideBpm(0);
+      }
       handleRef.current = handle;
       setListening(true);
     } catch (e) {
@@ -229,16 +255,28 @@ export function BeatDetectScreen({}: Props) {
   };
 
   const applyHalfDouble = (factor: 0.5 | 2) => {
-    if (bpm <= 0) return;
-    const next = clampBpm(Math.round(bpm) * factor);
+    const source = mode === 'auto' && guideBpm > 0 ? guideBpm : bpm;
+    if (source <= 0) return;
+    const next = clampBpm(Math.round(source) * factor);
     if (next < 40 || next > 220) return;
-    setBpm(next);
-    setActivePreset(null);
+    if (mode === 'auto') {
+      setGuideBpm(next);
+      handleRef.current?.setGuideBpm(next);
+      // 현재 표시도 절반/배수로 맞춤
+      if (bpm > 0) setBpm(next);
+    } else {
+      setBpm(next);
+      setActivePreset(null);
+    }
   };
 
   const switchMode = (next: Mode) => {
     resetAll();
     setMode(next);
+    // 자동 감지 선택 시 마이크 탐지 바로 시작 (가이드 초기화)
+    if (next === 'auto') {
+      void startAuto({ guide: 0 });
+    }
   };
 
   return (
@@ -325,7 +363,9 @@ export function BeatDetectScreen({}: Props) {
                     ]}
                   >
                     <Text style={styles.bpmLabel}>BPM</Text>
-                    <Text style={styles.bpmValue}>{formatBpm(bpm)}</Text>
+                    <Text style={styles.bpmValue}>
+                      {formatBpm(bpm, true)}
+                    </Text>
                   </Animated.View>
                 </View>
               )}
@@ -362,7 +402,7 @@ export function BeatDetectScreen({}: Props) {
               })}
             </View>
 
-            <Text style={styles.status} numberOfLines={1}>
+            <Text style={styles.status} numberOfLines={2}>
               {mode === 'tap'
                 ? bpm > 0
                   ? activePreset != null
@@ -373,8 +413,20 @@ export function BeatDetectScreen({}: Props) {
                   : '원을 탭하거나 프리셋으로 BPM 설정'
                 : listening
                   ? bpm > 0
-                    ? `${formatBpm(bpm)} BPM · 점멸 중`
-                    : '듣는 중…'
+                    ? guideBpm > 0
+                      ? `감지 ${formatBpm(bpm, true)} · 가이드 ${guideBpm}${
+                          confidence > 0.4
+                            ? ` · 안정 ${Math.round(confidence * 100)}%`
+                            : ''
+                        }`
+                      : `${formatBpm(bpm, true)} BPM · 점멸${
+                          confidence > 0.4
+                            ? ` · 안정 ${Math.round(confidence * 100)}%`
+                            : ''
+                        }`
+                    : guideBpm > 0
+                      ? `듣는 중… 가이드 ${guideBpm} (−/+로 조절)`
+                      : '듣는 중… (−/+로 가이드 설정)'
                   : '시작 버튼을 누르세요'}
             </Text>
 
