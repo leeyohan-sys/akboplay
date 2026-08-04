@@ -334,6 +334,11 @@ function extractSongMeta(raw) {
       artist = left;
       t = '';
     } else if (right.length > left.length + 4) {
+      // 긴쪽이 곡명 (예: 홀리원 - 우리는 주의 움직이는 교회)
+      artist = left;
+      t = right;
+    } else if (left.length > right.length + 4) {
+      artist = right;
       t = left;
     } else {
       t = left.length >= 2 ? left : right;
@@ -694,6 +699,21 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
   ) {
     score -= 40;
   }
+  // Intro만 있는 피아노 편곡(가사·단선 없음)은 CCM 예배용으로 약함
+  if (
+    /<Intro>|\[Intro\]|\bIntro\b|인트로/i.test(`${title} ${page}`) &&
+    !/가사|단선|멜로디|코드\s*악보|Verse|후렴|1절/i.test(`${title} ${page}`)
+  ) {
+    score -= 35;
+  }
+  // 기타/인도용은 단선·코드·가사 악보를 피아노 Intro보다 선호
+  if (/단선|멜로디\s*악보|코드\s*악보|가사\s*악보|lead\s*sheet/i.test(`${title} ${page}`)) {
+    score += 22;
+  }
+  if (/피아노\s*악보|piano\s*(score|sheet)/i.test(`${title} ${page}`) &&
+      !/단선|멜로디|코드\s*악보|가사/i.test(`${title} ${page}`)) {
+    score -= 12;
+  }
   // 흰 배경·인쇄용 표현 가산 / 어두운·빈티지 감점
   if (/흰\s*배경|화이트|인쇄용|고화질|clean|white\s*bg/i.test(`${title} ${page}`)) {
     score += 12;
@@ -716,6 +736,32 @@ function scoreImageCandidate(img, songTitle, artist = '', opts = {}) {
   if (/emoji|meme|cartoon|스티커|프로필/i.test(title)) score -= 30;
 
   return score;
+}
+
+/**
+ * 하단 블러 미리보기 → 상단만 잘라 재검사 (유료 사이트 미리보기 대응)
+ * @returns {{ buffer: Buffer, clarity: object } | null}
+ */
+async function trySalvageBottomBlur(buf) {
+  const sharp = require('sharp');
+  try {
+    const meta = await sharp(buf).metadata();
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    if (w < 280 || h < 400) return null;
+    // 하단 28~35%를 잘라 오선이 보이는 상단만 사용
+    const keepH = Math.floor(h * 0.68);
+    if (keepH < 320) return null;
+    const cropped = await sharp(buf)
+      .extract({ left: 0, top: 0, width: w, height: keepH })
+      .png()
+      .toBuffer();
+    const clarity = await assessImageClarity(cropped);
+    if (!clarity.ok) return null;
+    return { buffer: cropped, clarity };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1004,6 +1050,13 @@ async function findScoreImageBuffer(metaOrTitle) {
   const cores = hangulSearchCores(songTitle);
   // 네이버/구글에서 잘 되는 붙여쓰기형 (예: 우리는주의움직이는교회 악보)
   const gluedTitle = hangulTitle.replace(/\s+/g, '');
+  const altTitle = String(meta.altTitle || '')
+    .replace(/[^가-힣A-Za-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // 입례처럼 2~3글자 곡명은 동명이 많아 부제·아티스트를 앞에 둠
+  const shortHangul = hangulTitle.replace(/\s+/g, '').length > 0
+    && hangulTitle.replace(/\s+/g, '').length <= 3;
   const queries = isHymn
     ? [
         hymnNo ? `새찬송가 ${hymnNo}장 ${hangulTitle || songTitle} 악보` : '',
@@ -1015,7 +1068,16 @@ async function findScoreImageBuffer(metaOrTitle) {
         hymnNo ? `찬송가 ${hymnNo}장 가사 악보` : '',
       ].filter(Boolean)
     : [
-        // 곡명만 먼저 — 팀명 때문에 검색이 비는 경우 방지 (예: 우리는 주의 움직이는 교회)
+        // 짧은 곡명: 부제·아티스트 먼저 (입례 → 예배하는 자 되어)
+        shortHangul && altTitle ? `${altTitle} 악보` : '',
+        shortHangul && altTitle && hangulTitle
+          ? `${hangulTitle} ${altTitle} 악보`
+          : '',
+        shortHangul && artist && hangulTitle
+          ? `${artist} ${hangulTitle} 악보`
+          : '',
+        shortHangul && artist && altTitle ? `${artist} ${altTitle} 악보` : '',
+        // 곡명만 먼저 — 팀명 때문에 검색이 비는 경우 방지
         songTitle ? `${songTitle} 악보` : '',
         hangulTitle ? `${hangulTitle} 악보` : '',
         // 붙여쓰기형 (스크린샷과 동일 패턴)
@@ -1024,17 +1086,21 @@ async function findScoreImageBuffer(metaOrTitle) {
         hangulTitle ? `${hangulTitle} 코드 악보` : '',
         hangulTitle ? `${hangulTitle} 단선 악보` : '',
         hangulTitle ? `${hangulTitle} 가사 악보` : '',
+        hangulTitle ? `${hangulTitle} 멜로디 악보` : '',
+        gluedTitle && gluedTitle.length >= 4 ? `${gluedTitle} 단선 악보` : '',
         hangulTitle ? `${hangulTitle} 피아노 악보` : '',
         ...cores.map((c) => `${c} 악보`),
         ...cores.map((c) => `${c.replace(/\s+/g, '')} 악보`),
         ...cores.map((c) => `${c} 코드 악보`),
+        ...cores.map((c) => `${c} 단선 악보`),
         artist && songTitle ? `${songTitle} ${artist} 악보` : '',
         artist && hangulTitle ? `${hangulTitle} ${artist} 악보` : '',
         hangulTitle && latinOnly.length >= 3
           ? `${hangulTitle} ${latinOnly} 악보`
           : '',
         meta.searchQuery,
-        meta.altTitle ? `${meta.altTitle} 악보` : '',
+        !shortHangul && altTitle ? `${altTitle} 악보` : '',
+        altTitle && hangulTitle ? `${hangulTitle}(${altTitle}) 악보` : '',
         songTitle ? `${songTitle} sheet music` : '',
       ].filter(Boolean);
 
@@ -1076,7 +1142,7 @@ async function findScoreImageBuffer(metaOrTitle) {
         buf = await normalizeScoreBuffer(buf);
         const sharp = require('sharp');
         // eslint-disable-next-line no-await-in-loop
-        const imgMeta = await sharp(buf).metadata();
+        let imgMeta = await sharp(buf).metadata();
         if (!imgMeta.width || !imgMeta.height) continue;
         // 일반 CCM은 가로형·짧은 이미지도 허용폭을 조금 넓힘
         if (imgMeta.width / imgMeta.height > 1.55 && c.hit < (isHymn ? 60 : 45)) {
@@ -1092,7 +1158,23 @@ async function findScoreImageBuffer(metaOrTitle) {
         }
 
         // eslint-disable-next-line no-await-in-loop
-        const clarity = await assessImageClarity(buf);
+        let clarity = await assessImageClarity(buf);
+        if (!clarity.ok && /bottom-blur|bottom-third-blur/i.test(clarity.reason || '')) {
+          // eslint-disable-next-line no-await-in-loop
+          const salvaged = await trySalvageBottomBlur(buf);
+          if (salvaged) {
+            buf = salvaged.buffer;
+            clarity = { ...salvaged.clarity, reason: `salvaged-${clarity.reason}` };
+            // eslint-disable-next-line no-await-in-loop
+            const m2 = await sharp(buf).metadata();
+            if (m2.width && m2.height) {
+              imgMeta = m2;
+            }
+            console.log(
+              `[playlist-score-pdf] salvage bottom-blur · ${(c.title || '').slice(0, 40)}`,
+            );
+          }
+        }
         if (!clarity.ok) {
           console.log(
             `[playlist-score-pdf] skip low-quality (${clarity.reason}) · ${(c.title || '').slice(0, 40)}`,
@@ -1128,7 +1210,37 @@ async function findScoreImageBuffer(metaOrTitle) {
           Math.min(35, Math.floor(area / 45000)) +
           Math.min(24, (clarity.staffish || 0) * 2);
 
-        if (!best || fitness > best.fitness) {
+        const candTitle = c.title || '';
+        const candPartial =
+          /<Intro>|\[Intro\]|인트로만/i.test(candTitle) ||
+          (/피아노\s*악보|piano\s*(score|sheet|악보)?/i.test(candTitle) &&
+            !/단선|멜로디|코드\s*악보|가사\s*악보|전체/i.test(candTitle));
+        const candComplete =
+          /단선|멜로디|코드\s*악보|가사\s*악보|lead\s*sheet|전체\s*악보/i.test(
+            candTitle,
+          );
+        const bestPartial =
+          best &&
+          (/<Intro>|\[Intro\]|인트로만/i.test(best.meta?.title || '') ||
+            (/피아노\s*악보|piano/i.test(best.meta?.title || '') &&
+              !/단선|멜로디|코드\s*악보|가사\s*악보|전체/i.test(
+                best.meta?.title || '',
+              )));
+        const bestComplete =
+          best &&
+          /단선|멜로디|코드\s*악보|가사\s*악보|lead\s*sheet|전체\s*악보/i.test(
+            best.meta?.title || '',
+          );
+        // 부분(Intro/피아노) 후보보다 단선·코드 악보를 우선
+        const preferComplete =
+          bestPartial && candComplete && fitness >= (best.fitness || 0) - 55;
+        // 이미 단선/코드가 있으면 Intro·피아노만으로 덮어쓰지 않음
+        const keepComplete =
+          bestComplete && candPartial && fitness < (best.fitness || 0) + 45;
+        if (
+          !keepComplete &&
+          (!best || fitness > best.fitness || preferComplete)
+        ) {
           best = {
             buffer: buf,
             meta: {
@@ -1152,11 +1264,14 @@ async function findScoreImageBuffer(metaOrTitle) {
           /새찬송가|통일찬송가/i.test(c.title || '') ||
           (/찬송가\s*\d{2,3}\s*장/i.test(c.title || '') &&
             !/예람|피아|코드\s*악보|편곡|워십/i.test(c.title || ''));
+        // Intro-only·순수 피아노는 후보로만 보관하고, 단선/코드 검색을 더 돌림
+        const looksPartialScore = candPartial;
         if (
           fitness >= 130 &&
           (clarity.staffish || 0) >= 6 &&
           paper >= 220 &&
-          hymnOk
+          hymnOk &&
+          !looksPartialScore
         ) {
           return true; // 충분히 좋음 → 조기 종료
         }
@@ -1197,8 +1312,15 @@ async function findScoreImageBuffer(metaOrTitle) {
       const goodEnough = await evaluateCandidates(batch);
       if (goodEnough) break outer;
     }
-    // 이미 쓸 만한 후보가 있으면 추가 쿼리 생략
-    if (best && best.fitness >= (isHymn ? 130 : 110)) break;
+    // 쓸 만한 단선/코드 악보면 추가 쿼리 생략. Intro·피아노만이면 계속 검색
+    if (best && best.fitness >= (isHymn ? 130 : 110)) {
+      const t = String(best.meta?.title || '');
+      const partial =
+        /<Intro>|\[Intro\]|인트로만/i.test(t) ||
+        (/피아노\s*악보|piano/i.test(t) &&
+          !/단선|멜로디|코드\s*악보|가사\s*악보|전체/i.test(t));
+      if (!partial) break;
+    }
   }
 
   // 1차 실패 시: 문턱을 낮춰 한 번 더 (긴 CCM 곡명·블로그 악보 대응)
@@ -1226,7 +1348,15 @@ async function findScoreImageBuffer(metaOrTitle) {
           if (!imgMeta.width || !imgMeta.height) continue;
           if (imgMeta.height < 280) continue;
           // eslint-disable-next-line no-await-in-loop
-          const clarity = await assessImageClarity(buf);
+          let clarity = await assessImageClarity(buf);
+          if (!clarity.ok && /bottom-blur|bottom-third-blur/i.test(clarity.reason || '')) {
+            // eslint-disable-next-line no-await-in-loop
+            const salvaged = await trySalvageBottomBlur(buf);
+            if (salvaged) {
+              buf = salvaged.buffer;
+              clarity = salvaged.clarity;
+            }
+          }
           if (!clarity.ok) continue;
           if ((clarity.staffish || 0) < 1 && c.hit < 40) continue;
           const paper = Number(clarity.paper) || 0;
