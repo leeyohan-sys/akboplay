@@ -217,6 +217,10 @@ app.post('/api/analyze/jobs', upload.single('pdf'), async (req, res) => {
       Promise.race([
         analyzePdfBuffer(buffer, fileName, {
           onProgress: (p) => {
+            // 데드라인 초과로 이미 종료 처리된 작업이면 무시 (Promise.race가
+            // 진 쪽을 취소하지 않아 아래 setTimeout 이후에도 analyzePdfBuffer가
+            // 백그라운드에서 계속 돌며 진행 메시지를 보낼 수 있음)
+            if (job.status !== 'running') return;
             job.stage = p.stage || job.stage;
             job.message = p.message || job.message;
             if (typeof p.current === 'number') job.current = p.current;

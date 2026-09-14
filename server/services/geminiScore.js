@@ -181,6 +181,10 @@ async function extractSongsWithGemini(buffer, fileName) {
 
   // 페이지가 많을수록 여유 시간 부여 (최대 2분)
   const timeoutMs = Math.min(120000, 35000 + images.length * 12000);
+  // analyze 작업 전체 예산(100초) 중 일부만 Gemini에 배정 — 나머지는
+  // OCR 폴백이 쓸 수 있어야 함 (안 그러면 첫 모델 응답이 느릴 때
+  // 전체 예산을 혼자 다 쓰고 폴백이 시작도 못 함)
+  const deadlineMs = 60000;
 
   console.log(`[gemini] 인식 준비 · pages=${images.length}`);
   const response = await generateContent({
@@ -190,6 +194,7 @@ async function extractSongsWithGemini(buffer, fileName) {
       maxOutputTokens: 4096,
     },
     timeoutMs,
+    deadlineMs,
     label: 'gemini',
   });
 

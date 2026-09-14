@@ -8,8 +8,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const MODEL_NAMES = [
   'gemini-flash-latest',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
+  'gemini-flash-lite-latest',
+  'gemini-2.5-flash',
 ];
 
 /** 무료 쿼터 기준: 호출 사이 최소 간격 */
