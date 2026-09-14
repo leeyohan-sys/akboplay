@@ -8,8 +8,8 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 /** 목록 조회 자체가 실패할 때만 쓰는 최후 폴백 (마지막 확인: 2026-09) */
 const FALLBACK_MODEL_NAMES = [
-  'gemini-flash-latest',
   'gemini-flash-lite-latest',
+  'gemini-flash-latest',
   'gemini-2.5-flash',
 ];
 /** 한 번에 시도할 후보 모델 수 (많을수록 안전하지만 최악의 경우 대기 시간 증가) */
@@ -22,9 +22,11 @@ let modelListCache = { names: null, fetchedAt: 0 };
 let modelListInFlight = null;
 
 function scoreModelName(name) {
-  if (/-latest$/i.test(name)) return 0; // 별칭 — 구글이 알아서 최신 안정판을 가리킴
-  if (/preview|exp(?:erimental)?/i.test(name)) return 2; // 프리뷰는 불안정하니 후순위
-  return 1; // 고정 버전 안정 릴리스
+  // 별칭(-latest)이 고정 버전보다 먼저, 그 안에서도 lite가 먼저
+  // (lite가 더 빠르고 과부하로 503/timeout이 덜 남 — 실측으로 확인됨)
+  const tier = /-latest$/i.test(name) ? 0 : /preview|exp(?:erimental)?/i.test(name) ? 2 : 1;
+  const liteBonus = /lite/i.test(name) ? -0.5 : 0;
+  return tier + liteBonus;
 }
 
 /**
