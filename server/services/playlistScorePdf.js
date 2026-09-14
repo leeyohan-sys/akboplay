@@ -2215,4 +2215,5 @@ module.exports = {
   cleanSongTitle,
   extractSongMeta,
   loadPlaylist,
+  findScoreImageBuffer,
 };

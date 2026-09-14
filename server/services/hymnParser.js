@@ -548,6 +548,8 @@ function extractLabeledTitles(text) {
     // OCR 깨진 영문 조각이 섞인 제목 제외
     const latin = ((cleaned.match(/[A-Za-z]/g) || []).length);
     if (latin >= 3 && latin >= hangulLen(cleaned) * 0.4) return;
+    // 단어 수가 많으면 "1. 가사..." 형태의 가사 줄(절 번호)이지 곡 목록이 아님
+    if (cleaned.split(/\s+/).length > 5) return;
     const key = normalize(cleaned);
     if (seen.has(key)) return;
     // 이미 등록된 지문 제목과 한 글자만 다른 변형(표대/푯대)은 스킵
@@ -700,11 +702,12 @@ function completeKnownWorshipSets(songs, fileName, text) {
       return fp.needles.some((n) => normText.includes(normalize(n)));
     });
 
+    // 파일명 힌트가 있으면 느슨하게, 없으면 세트 대부분이 일치할 때만
+    // 완성 — 흔한 찬양곡(예: 예수 사랑하심은) 2곡만 겹쳐도 무관한 다른
+    // 날짜의 세트 전체가 끼워 들어가는 오염을 막기 위함.
     const shouldComplete =
-      hitCount >= 2 ||
-      (fileHit && hitCount >= 1) ||
-      (fileHit && textHasSet) ||
-      (fileHit && thin && textHasSet);
+      (fileHit && (hitCount >= 1 || textHasSet || (thin && textHasSet))) ||
+      (!fileHit && hitCount >= Math.max(3, set.titles.length - 1));
 
     if (!shouldComplete) continue;
 
