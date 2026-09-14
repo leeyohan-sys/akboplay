@@ -6,11 +6,79 @@
  */
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const MODEL_NAMES = [
+/** 목록 조회 자체가 실패할 때만 쓰는 최후 폴백 (마지막 확인: 2026-09) */
+const FALLBACK_MODEL_NAMES = [
   'gemini-flash-latest',
   'gemini-flash-lite-latest',
   'gemini-2.5-flash',
 ];
+/** 한 번에 시도할 후보 모델 수 (많을수록 안전하지만 최악의 경우 대기 시간 증가) */
+const MODEL_CANDIDATE_COUNT = 4;
+const MODEL_LIST_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const MODEL_LIST_TTL_MS = 6 * 60 * 60 * 1000; // 6시간마다 재조회
+const MODEL_LIST_FETCH_TIMEOUT_MS = 8000;
+
+let modelListCache = { names: null, fetchedAt: 0 };
+let modelListInFlight = null;
+
+function scoreModelName(name) {
+  if (/-latest$/i.test(name)) return 0; // 별칭 — 구글이 알아서 최신 안정판을 가리킴
+  if (/preview|exp(?:erimental)?/i.test(name)) return 2; // 프리뷰는 불안정하니 후순위
+  return 1; // 고정 버전 안정 릴리스
+}
+
+/**
+ * Google이 모델명을 자주 바꾸고 예고 없이 없애서(예: 2026-09에
+ * gemini-2.0-flash* 전체 제거), 하드코딩 목록 대신 매번 실제 사용 가능한
+ * 모델을 조회해 캐싱한다. 조회 실패 시 이전 캐시 → 최후 폴백 순으로 사용.
+ */
+async function fetchModelList() {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+  try {
+    const res = await fetch(`${MODEL_LIST_URL}?key=${apiKey}&pageSize=200`, {
+      signal: AbortSignal.timeout(MODEL_LIST_FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const names = [
+      ...new Set(
+        (json.models || [])
+          .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+          .map((m) => String(m.name || '').replace(/^models\//, ''))
+          // 이미지/음성 전용 변형은 텍스트+사진 JSON 추출 용도에 안 맞아 제외
+          .filter((name) => /flash/i.test(name) && !/image|tts|audio|omni/i.test(name)),
+      ),
+    ];
+    if (!names.length) return null;
+    return names.sort((a, b) => scoreModelName(a) - scoreModelName(b));
+  } catch (err) {
+    console.warn('[gemini] 모델 목록 조회 실패:', err.message);
+    return null;
+  }
+}
+
+async function getModelNames() {
+  const now = Date.now();
+  if (modelListCache.names && now - modelListCache.fetchedAt < MODEL_LIST_TTL_MS) {
+    return modelListCache.names;
+  }
+  if (!modelListInFlight) {
+    modelListInFlight = fetchModelList().finally(() => {
+      modelListInFlight = null;
+    });
+  }
+  const fresh = await modelListInFlight;
+  if (fresh) {
+    modelListCache = { names: fresh, fetchedAt: now };
+    return fresh;
+  }
+  // 조회 실패 — 오래된 캐시라도 있으면 그걸, 없으면 하드코딩 폴백
+  return modelListCache.names || FALLBACK_MODEL_NAMES;
+}
+
+// 서버 기동 시 미리 한 번 조회 — 첫 실제 요청이 목록 조회 지연을 겪지 않도록
+getModelNames().catch(() => {});
 
 /** 무료 쿼터 기준: 호출 사이 최소 간격 */
 const MIN_INTERVAL_MS = Number(process.env.GEMINI_MIN_INTERVAL_MS || 8000);
@@ -142,8 +210,9 @@ async function generateContent(opts) {
 
     let lastError = null;
     const retries = Math.max(1, Number(maxRetries) || MAX_RETRIES_PER_MODEL);
+    const modelNames = (await getModelNames()).slice(0, MODEL_CANDIDATE_COUNT);
 
-    for (const modelName of MODEL_NAMES) {
+    for (const modelName of modelNames) {
       for (let attempt = 0; attempt < retries; attempt++) {
         try {
           // 마감이 임박하면 대기하지 않고 즉시 안내
@@ -249,6 +318,6 @@ async function generateContent(opts) {
 module.exports = {
   isConfigured,
   generateContent,
-  MODEL_NAMES,
+  getModelNames,
   MIN_INTERVAL_MS,
 };
