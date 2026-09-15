@@ -225,33 +225,36 @@ async function resolveWatchVideosUrl(watchVideosUrl) {
     Cookie: 'CONSENT=YES+1; SOCS=CAI',
   };
 
+  const trace = [];
   let current = watchVideosUrl;
   try {
     for (let hop = 0; hop < 5; hop += 1) {
       const res = await fetch(current, { redirect: 'manual', headers });
       const location = res.headers.get('location');
+      trace.push(`hop${hop}:${res.status}:${location || '(none)'}`);
       if (!location) break;
 
       const next = new URL(location, current).toString();
       if (/^https:\/\/(www\.)?youtube\.com\/watch\?/.test(next)) {
-        return next;
+        return { url: next, trace };
       }
       current = next;
     }
-  } catch {
-    // 실패 시 원본 watch_videos URL 사용
+  } catch (e) {
+    trace.push(`error:${e && e.message}`);
   }
-  return watchVideosUrl;
+  return { url: watchVideosUrl, trace };
 }
 
 async function buildWatchPlaylistUrl(videoIds, title) {
   const ids = videoIds.filter(Boolean);
-  if (ids.length === 0) return null;
+  if (ids.length === 0) return { url: null, trace: [] };
 
   const url = new URL('https://www.youtube.com/watch_videos');
   url.searchParams.set('video_ids', ids.join(','));
   if (title) url.searchParams.set('title', title);
-  return resolveWatchVideosUrl(url.toString());
+  const resolved = await resolveWatchVideosUrl(url.toString());
+  return resolved;
 }
 
 async function buildAutoPlaylist({ title, songs }) {
@@ -265,7 +268,8 @@ async function buildAutoPlaylist({ title, songs }) {
   const started = Date.now();
   const resolved = await resolveVideos(list);
   const videoIds = resolved.map((r) => r.videoId).filter(Boolean);
-  const playlistUrl = await buildWatchPlaylistUrl(videoIds, title);
+  const { url: playlistUrl, trace: playlistUrlTrace } =
+    await buildWatchPlaylistUrl(videoIds, title);
 
   if (!playlistUrl) {
     const err = new Error('유튜브에서 재생할 영상을 찾지 못했습니다.');
@@ -285,6 +289,7 @@ async function buildAutoPlaylist({ title, songs }) {
     preferredCount: resolved.filter((r) => r.preferredArtist).length,
     elapsedMs: Date.now() - started,
     videos: resolved,
+    _debugPlaylistUrlTrace: playlistUrlTrace,
   };
 }
 
