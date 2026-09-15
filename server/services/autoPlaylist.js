@@ -211,19 +211,32 @@ async function resolveVideos(songs) {
  * watch_videos는 앱이 딥링크로 열 수 없는 임시 리다이렉트 엔드포인트라
  * 서버에서 미리 302/303을 따라가 실제 list= 파라미터가 붙은 /watch URL로
  * 바꿔준다. (유튜브 앱은 /watch?v=..&list=.. 형태만 딥링크로 인식함)
+ *
+ * 클라우드 호스팅(데이터센터) IP로 요청하면 구글이 303 대신
+ * consent.youtube.com 동의 화면으로 리다이렉트해 최종 목적지를 못 받는
+ * 경우가 있어, 동의를 건너뛰는 쿠키를 미리 실어 보내고 리다이렉트를
+ * 몇 단계까지 따라간다.
  */
 async function resolveWatchVideosUrl(watchVideosUrl) {
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    // 구글 쿠키 동의 화면 우회 (yt-dlp 등에서 쓰는 표준 우회값)
+    Cookie: 'CONSENT=YES+1; SOCS=CAI',
+  };
+
+  let current = watchVideosUrl;
   try {
-    const res = await fetch(watchVideosUrl, {
-      redirect: 'manual',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-    });
-    const location = res.headers.get('location');
-    if (location && /^https:\/\/(www\.)?youtube\.com\/watch/.test(location)) {
-      return location;
+    for (let hop = 0; hop < 5; hop += 1) {
+      const res = await fetch(current, { redirect: 'manual', headers });
+      const location = res.headers.get('location');
+      if (!location) break;
+
+      const next = new URL(location, current).toString();
+      if (/^https:\/\/(www\.)?youtube\.com\/watch\?/.test(next)) {
+        return next;
+      }
+      current = next;
     }
   } catch {
     // 실패 시 원본 watch_videos URL 사용
