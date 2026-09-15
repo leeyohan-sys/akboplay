@@ -116,7 +116,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'analyze-progress-jobs-20260804',
+    version: 'autodeploy-test-20260915',
   });
 });
 
