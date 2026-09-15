@@ -207,14 +207,38 @@ async function resolveVideos(songs) {
   });
 }
 
-function buildWatchPlaylistUrl(videoIds, title) {
+/**
+ * watch_videos는 앱이 딥링크로 열 수 없는 임시 리다이렉트 엔드포인트라
+ * 서버에서 미리 302/303을 따라가 실제 list= 파라미터가 붙은 /watch URL로
+ * 바꿔준다. (유튜브 앱은 /watch?v=..&list=.. 형태만 딥링크로 인식함)
+ */
+async function resolveWatchVideosUrl(watchVideosUrl) {
+  try {
+    const res = await fetch(watchVideosUrl, {
+      redirect: 'manual',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+    const location = res.headers.get('location');
+    if (location && /^https:\/\/(www\.)?youtube\.com\/watch/.test(location)) {
+      return location;
+    }
+  } catch {
+    // 실패 시 원본 watch_videos URL 사용
+  }
+  return watchVideosUrl;
+}
+
+async function buildWatchPlaylistUrl(videoIds, title) {
   const ids = videoIds.filter(Boolean);
   if (ids.length === 0) return null;
 
   const url = new URL('https://www.youtube.com/watch_videos');
   url.searchParams.set('video_ids', ids.join(','));
   if (title) url.searchParams.set('title', title);
-  return url.toString();
+  return resolveWatchVideosUrl(url.toString());
 }
 
 async function buildAutoPlaylist({ title, songs }) {
@@ -228,7 +252,7 @@ async function buildAutoPlaylist({ title, songs }) {
   const started = Date.now();
   const resolved = await resolveVideos(list);
   const videoIds = resolved.map((r) => r.videoId).filter(Boolean);
-  const playlistUrl = buildWatchPlaylistUrl(videoIds, title);
+  const playlistUrl = await buildWatchPlaylistUrl(videoIds, title);
 
   if (!playlistUrl) {
     const err = new Error('유튜브에서 재생할 영상을 찾지 못했습니다.');
