@@ -3,7 +3,7 @@
  * 우선순위: 한국 대표 워십팀 → 없으면 조회수·인지도 높은 버전
  * (Gemini 미사용 — youtube-sr 검색 + 로컬 랭킹만)
  */
-const YouTube = require('youtube-sr').default;
+const YouTube = require('./youtubeSr');
 const { formatKeyForSearch } = require('./musicKey');
 
 /** 한국 대표 워십팀 (검색·선호 판별) */
@@ -216,7 +216,13 @@ async function resolveVideos(songs) {
  * consent.youtube.com 동의 화면으로 리다이렉트해 최종 목적지를 못 받는
  * 경우가 있어, 동의를 건너뛰는 쿠키를 미리 실어 보내고 리다이렉트를
  * 몇 단계까지 따라간다.
+ *
+ * Render 등 데이터센터 IP는 google.com/sorry(봇 차단, 429)로 막히는 경우가
+ * 많다. 그때는 바로 포기하고 원본 watch_videos URL을 돌려준다
+ * → 클라이언트가 사용자 기기(일반 IP)의 브라우저로 직접 열어 해석한다.
  */
+const RESOLVE_TIMEOUT_MS = 5000;
+
 async function resolveWatchVideosUrl(watchVideosUrl) {
   const headers = {
     'User-Agent':
@@ -225,36 +231,42 @@ async function resolveWatchVideosUrl(watchVideosUrl) {
     Cookie: 'CONSENT=YES+1; SOCS=CAI',
   };
 
-  const trace = [];
   let current = watchVideosUrl;
   try {
     for (let hop = 0; hop < 5; hop += 1) {
-      const res = await fetch(current, { redirect: 'manual', headers });
+      const res = await fetch(current, {
+        redirect: 'manual',
+        headers,
+        signal: AbortSignal.timeout(RESOLVE_TIMEOUT_MS),
+      });
       const location = res.headers.get('location');
-      trace.push(`hop${hop}:${res.status}:${location || '(none)'}`);
       if (!location) break;
 
       const next = new URL(location, current).toString();
       if (/^https:\/\/(www\.)?youtube\.com\/watch\?/.test(next)) {
-        return { url: next, trace };
+        return next;
+      }
+      // 봇 차단 페이지 — 더 따라가도 429만 받음
+      if (/^https:\/\/(www\.)?google\.[^/]+\/sorry\//.test(next)) {
+        console.warn('[autoPlaylist] watch_videos 해석이 구글 봇 차단에 막힘');
+        break;
       }
       current = next;
     }
-  } catch (e) {
-    trace.push(`error:${e && e.message}`);
+  } catch {
+    // 실패 시 원본 watch_videos URL 사용
   }
-  return { url: watchVideosUrl, trace };
+  return watchVideosUrl;
 }
 
 async function buildWatchPlaylistUrl(videoIds, title) {
   const ids = videoIds.filter(Boolean);
-  if (ids.length === 0) return { url: null, trace: [] };
+  if (ids.length === 0) return null;
 
   const url = new URL('https://www.youtube.com/watch_videos');
   url.searchParams.set('video_ids', ids.join(','));
   if (title) url.searchParams.set('title', title);
-  const resolved = await resolveWatchVideosUrl(url.toString());
-  return resolved;
+  return resolveWatchVideosUrl(url.toString());
 }
 
 async function buildAutoPlaylist({ title, songs }) {
@@ -268,8 +280,7 @@ async function buildAutoPlaylist({ title, songs }) {
   const started = Date.now();
   const resolved = await resolveVideos(list);
   const videoIds = resolved.map((r) => r.videoId).filter(Boolean);
-  const { url: playlistUrl, trace: playlistUrlTrace } =
-    await buildWatchPlaylistUrl(videoIds, title);
+  const playlistUrl = await buildWatchPlaylistUrl(videoIds, title);
 
   if (!playlistUrl) {
     const err = new Error('유튜브에서 재생할 영상을 찾지 못했습니다.');
@@ -289,7 +300,6 @@ async function buildAutoPlaylist({ title, songs }) {
     preferredCount: resolved.filter((r) => r.preferredArtist).length,
     elapsedMs: Date.now() - started,
     videos: resolved,
-    _debugPlaylistUrlTrace: playlistUrlTrace,
   };
 }
 

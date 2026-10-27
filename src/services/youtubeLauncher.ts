@@ -37,6 +37,21 @@ export function isMobileWeb(): boolean {
 }
 
 /**
+ * 서버가 해석하지 못한 watch_videos URL 여부
+ * (유튜브 앱은 이 경로를 딥링크로 인식 못 함 → 브라우저가 열어서 리다이렉트를 따라가야 함)
+ */
+export function isUnresolvedWatchVideosUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      /(^|\.)youtube\.com$/.test(u.hostname) && u.pathname === '/watch_videos'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * HTTPS 유튜브 URL → 네이티브 앱 스킴/인텐트
  * Android: intent:// 로 유튜브 앱 강제
  * iOS: youtube:// 스킴 (실패 시 https 폴백은 호출부에서)
@@ -114,6 +129,13 @@ export function openYoutubeWindowPlaceholder(): Window | null {
 export async function openInYoutubeApp(url: string): Promise<void> {
   if (Platform.OS !== 'web') {
     await Linking.openURL(url);
+    return;
+  }
+
+  if (isMobileWeb() && isUnresolvedWatchVideosUrl(url)) {
+    // 사용자 기기(일반 IP)의 브라우저가 watch_videos → /watch?list= 로 리다이렉트를
+    // 따라가게 둔다. 앱 스킴으로 넘기면 유튜브 앱이 경로를 몰라 홈만 열림.
+    window.location.href = url;
     return;
   }
 

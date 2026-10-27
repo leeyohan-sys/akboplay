@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { pathToFileURL } = require('url');
-const YouTube = require('youtube-sr').default;
+const YouTube = require('./youtubeSr');
 const { randomUUID } = require('crypto');
 
 const MAX_SONGS = 24;
