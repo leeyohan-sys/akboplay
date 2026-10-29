@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
+import { InstallAppButton } from '../components/InstallAppButton';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenShell } from '../components/ScreenShell';
 import { colors } from '../theme/colors';
@@ -258,6 +259,7 @@ export function HomeScreen({ navigation }: Props) {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator
       >
+        <InstallAppButton />
         <Animated.View style={{ opacity: fade }}>
           <Text style={styles.eyebrow}>PDF SCORE → YOUTUBE</Text>
           <Text style={[typography.brand, compact && styles.brandCompact]}>

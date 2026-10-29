@@ -11,6 +11,23 @@ if (typeof document !== 'undefined') {
       'https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@600;700&display=swap';
     document.head.appendChild(fonts);
 
+    // 홈 화면에 앱 추가(PWA)용 매니페스트·아이콘 — public/ 폴더가 baseUrl 아래로 배포됨
+    const base = (process.env.EXPO_BASE_URL ?? '').replace(/\/$/, '');
+    const headTags: [string, Record<string, string>][] = [
+      ['link', { rel: 'manifest', href: `${base}/manifest.webmanifest` }],
+      ['link', { rel: 'apple-touch-icon', href: `${base}/apple-touch-icon.png` }],
+      ['meta', { name: 'theme-color', content: '#0E1520' }],
+      ['meta', { name: 'apple-mobile-web-app-capable', content: 'yes' }],
+      ['meta', { name: 'mobile-web-app-capable', content: 'yes' }],
+      ['meta', { name: 'apple-mobile-web-app-title', content: '악보플레이' }],
+      ['meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' }],
+    ];
+    headTags.forEach(([tag, attrs]) => {
+      const el = document.createElement(tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      document.head.appendChild(el);
+    });
+
     const viewport = document.querySelector('meta[name="viewport"]');
     if (viewport) {
       viewport.setAttribute(

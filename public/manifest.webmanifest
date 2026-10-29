@@ -1,0 +1,16 @@
+{
+  "name": "악보플레이",
+  "short_name": "악보플레이",
+  "description": "PDF 악보를 첨부하면 곡을 찾아 유튜브 플레이리스트로 만들어 주는 앱",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0E1520",
+  "theme_color": "#0E1520",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
