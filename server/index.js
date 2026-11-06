@@ -116,7 +116,7 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'watch-videos-fallback-20261027',
+    version: 'yt-header-size-20261106',
   });
 });
 
