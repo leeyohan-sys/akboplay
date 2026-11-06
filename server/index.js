@@ -116,42 +116,8 @@ app.get('/api/health', (_req, res) => {
     youtubeConfigured: isConfigured(),
     oauthConfigured: Boolean(process.env.YOUTUBE_ACCESS_TOKEN),
     geminiConfigured: isGeminiConfigured(),
-    version: 'yt-debug-20261106',
+    version: 'yt-header-size-20261106',
   });
-});
-
-/** 임시 진단: 배포 서버에서 유튜브 검색이 어떻게 실패하는지 확인 */
-app.get('/api/debug/yt-search', async (_req, res) => {
-  const out = { node: process.version };
-  try {
-    const { fetch: undiciFetch, Agent } = require('undici');
-    const r = await undiciFetch(
-      'https://youtube.com/results?search_query=%EC%B0%AC%EC%96%91&hl=en&sp=EgIQAQ%253D%253D',
-      {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; rv:140.0) Gecko/20100101 Firefox/140.0',
-        },
-        dispatcher: new Agent({ maxHeaderSize: 128 * 1024 }),
-      },
-    );
-    const html = await r.text();
-    out.status = r.status;
-    out.finalUrl = r.url;
-    out.length = html.length;
-    out.hasInitialData = html.includes('ytInitialData');
-    out.snippet = html.slice(0, 300);
-  } catch (e) {
-    out.fetchError = `${e.message} ${e.cause?.code || ''}`;
-  }
-  try {
-    const YouTube = require('./services/youtubeSr');
-    const v = await YouTube.search('찬양', { limit: 3, type: 'video' });
-    out.srCount = v.length;
-  } catch (e) {
-    out.srError = `${e.message} ${e.cause?.code || ''}`;
-  }
-  res.json(out);
 });
 
 app.get('/api/demo', (_req, res) => {
